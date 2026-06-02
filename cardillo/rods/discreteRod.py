@@ -121,20 +121,6 @@ class ElementKinematics:
         B_Omega = self.B_Omega(t, q, u)
         B_Psi = self.B_Psi(t, q, u, u_dot)
         return _a_P(self.alpha, u_dot, A_IB, B_Omega, B_Psi, B_r_CP)
-        # centerline acceleration
-        a_C0 = u_dot[:3]
-        a_C1 = u_dot[6:9]
-        a_C = a_C0 + self.alpha * (a_C1 - a_C0)
-        if is_nonzero3(B_r_CP):
-            A_IB = self.A_IB(t, q)
-            B_Omega = self.B_Omega(t, q, u)
-            B_Psi = self.B_Psi(t, q, u, u_dot)
-            # rigid body formular
-            return a_C + A_IB @ (
-                cross3(B_Psi, B_r_CP) + cross3(B_Omega, cross3(B_Omega, B_r_CP))
-            )
-        else:
-            return a_C
 
     def a_P_q(self, t, q, u, u_dot, B_r_CP=None):
         raise
