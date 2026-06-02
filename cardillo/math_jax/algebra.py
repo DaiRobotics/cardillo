@@ -83,12 +83,11 @@ def skew2ax_A() -> jnp.ndarray:
     )
 
 
-# prefer jnp.cross if possible
-# @jit
-# def cross3(a: jnp.ndarray, b: jnp.ndarray) -> jnp.ndarray:
-#     """Vector product of two 3D vectors."""
-#     # fmt: off
-#     return jnp.array([a[1] * b[2] - a[2] * b[1], 
-#                       a[2] * b[0] - a[0] * b[2], 
-#                       a[0] * b[1] - a[1] * b[0]], dtype=jnp.float64)
-#     # fmt: on
+@jit
+def cross3(a: jnp.ndarray, b: jnp.ndarray) -> jnp.ndarray:
+    """Vector product of two 3D vectors."""
+    # fmt: off
+    return jnp.array([a[1] * b[2] - a[2] * b[1], 
+                      a[2] * b[0] - a[0] * b[2], 
+                      a[0] * b[1] - a[1] * b[0]], dtype=jnp.float64)
+    # fmt: on

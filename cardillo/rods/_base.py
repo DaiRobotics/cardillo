@@ -132,7 +132,7 @@ class CosseratRod_PetrovGalerkin(RodExportBase, ABC):
             dim_q=3,
             derivative_order=1,
             basis="Lagrange",
-            quadrature="Gauss",
+            quadrature="Lobatto",
         )
         self.mesh_p = Mesh1D(
             self.knot_vector_p,
@@ -149,7 +149,7 @@ class CosseratRod_PetrovGalerkin(RodExportBase, ABC):
             dim_q=4,
             derivative_order=1,
             basis="Lagrange",
-            quadrature="Gauss",
+            quadrature="Lobatto",
             dim_u=3,
         )
 

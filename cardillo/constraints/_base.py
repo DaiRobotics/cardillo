@@ -4,7 +4,6 @@ import numpy as np
 
 from cardillo.math import ax2skew, cross3
 from cardillo.math.approx_fprime import approx_fprime
-from ..rods.discreteRod import DiscreteRod
 
 
 def len_slice(x):
@@ -211,10 +210,6 @@ class PositionOrientationBase:
         xi2=None,
         **kwargs,
     ):
-        if isinstance(subsystem1, DiscreteRod):
-            subsystem1 = subsystem1.get_marker(xi1)
-        if isinstance(subsystem2, DiscreteRod):
-            subsystem2 = subsystem2.get_marker(xi2)
         self.subsystem1 = subsystem1
         self.subsystem2 = subsystem2
         self.xi1 = xi1

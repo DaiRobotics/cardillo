@@ -1,4 +1,4 @@
-from ..interactions import nPointInteraction
+from cardillo.interactions import nPointInteraction
 
 
 class TendonForce(nPointInteraction):
