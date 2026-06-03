@@ -1,5 +1,5 @@
 import numpy as np
-from cardillo.math import norm, outer3
+from cardillo.math_numba import norm, outer3
 from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.utility.cachetools import MyLRUCache
 

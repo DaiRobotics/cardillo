@@ -322,7 +322,7 @@ class ScipyDAE:
             **self.kwargs,
         )
         self.pbar.close()
-        # solver_summary.print()
+        solver_summary.print()
 
         # unpack solution
         t = sol.t
@@ -341,4 +341,7 @@ class ScipyDAE:
             la_gamma=la_gamma.T,
             la_c=la_c.T,
             solver_summary=solver_summary,
+            nfev=sol.nfev,
+            njev=sol.njev,
+            nlu=sol.nlu,
         )

@@ -750,7 +750,7 @@ def quatprod(P, Q):
     return np.array([z0, *z])
 
 
-@njit(cache=True)
-def axis_angle2quat(axis, angle):
-    n = axis / norm(axis)
-    return np.concatenate([[np.cos(angle / 2)], np.sin(angle / 2) * n])
+# @njit(cache=True)
+# def axis_angle2quat(axis, angle):
+#     n = axis / norm(axis)
+#     return np.concatenate([[np.cos(angle / 2)], np.sin(angle / 2) * n])
