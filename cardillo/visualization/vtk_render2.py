@@ -15,11 +15,7 @@ from cardillo import math_jax
 class _VisualTwinBase(ABC):
     def __init__(self, contr, xi=None):
         self.xi = xi
-        if hasattr(contr, "get_marker") and xi is not None:
-            mk = contr.get_marker(xi)
-            self.contr = mk
-        else:
-            self.contr = contr
+        self.contr = contr
         self.actors = []
         if not hasattr(contr, "visual_twins"):
             contr.visual_twins = [self]
@@ -213,14 +209,11 @@ class _VisualvtkSource(_VisualTwinBase):
         self.actors.append(actor)
 
     def update_visual_state(self, sol_i):
+        contr = self.contr
         t, q = sol_i.t, sol_i.q[self.contr.qDOF]
         xi = self.xi
-        if isinstance(self.contr, CosseratRod_PetrovGalerkin):
-            qe = q[self.contr.local_qDOF_P(xi)]
-            r_OP, A_IB, _, _ = self.contr._eval(qe, xi, self.N, self.N_xi)
-        else:
-            A_IB = self.contr.A_IB(t, q, xi)
-            r_OP = self.contr.r_OP(t, q, xi)
+        A_IB = contr.A_IB(t, q[contr.local_qDOF_P(xi)], xi)
+        r_OP = contr.r_OP(t, q[contr.local_qDOF_P(xi)], xi)
         for i in range(3):
             for j in range(3):
                 self.H_IB.SetElement(i, j, A_IB[i, j])
@@ -324,14 +317,11 @@ class VisualArUco(_VisualTwinBase):
             # subsystem.appendfilter.AddInputConnection(filter.GetOutputPort())
 
     def update_visual_state(self, sol_i):
+        contr = self.contr
         t, q = sol_i.t, sol_i.q[self.contr.qDOF]
         xi = self.xi
-        if isinstance(self.contr, CosseratRod_PetrovGalerkin):
-            qe = q[self.contr.local_qDOF_P(xi)]
-            r_OP, A_IB, _, _ = self.contr._eval(qe, xi, self.N, self.N_xi)
-        else:
-            A_IB = self.contr.A_IB(t, q, xi)
-            r_OP = self.contr.r_OP(t, q, xi)
+        A_IB = contr.A_IB(t, q[contr.local_qDOF_P(xi)], xi)
+        r_OP = contr.r_OP(t, q[contr.local_qDOF_P(xi)], xi)
         for i in range(3):
             for j in range(3):
                 self.H_IB.SetElement(i, j, A_IB[i, j])
@@ -499,11 +489,6 @@ class Plotter:
             if hasattr(contr, "visual_twins"):
                 for twin in contr.visual_twins:
                     self.__add_visual_twin(twin)
-            if hasattr(contr, "_markers"):
-                for marker in contr._markers.values():
-                    if hasattr(marker, "visual_twins"):
-                        for twin in marker.visual_twins:
-                            self.__add_visual_twin(twin)
 
         self.__window_open = False
 

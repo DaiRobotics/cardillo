@@ -56,3 +56,6 @@ myvenv
 
 # profiling results
 *.prof
+
+# MacOS
+.DS_Store

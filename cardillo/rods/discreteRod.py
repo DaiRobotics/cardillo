@@ -441,7 +441,7 @@ class DiscreteRod:
         self._c_la_c_coo = _c_la_c_coo.asformat("coo")
         self._c_la_c_coo.eliminate_zeros()
 
-        self._markers = {}
+        self._kinematics_els = {}
 
         # allocate memery
         self._B_Omega_q = np.zeros((3, 14), dtype=float)
@@ -522,20 +522,20 @@ class DiscreteRod:
         q_body = q[self.qDOF]
         return np.array([q_body[nodalDOF] for nodalDOF in self.nodalDOF_r]).T
 
-    def get_marker(self, xi):
+    def __get_el_kinematics(self, xi):
         try:
-            mk = self._markers[xi]
+            el = self._kinematics_els[xi]
         except KeyError:
             alpha = self._alpha(xi)
-            mk = ElementKinematics(xi, alpha)
-            self._markers[xi] = mk
-        if hasattr(self, "qDOF") and not hasattr(mk, "qDOF"):
+            el = ElementKinematics(xi, alpha)
+            self._kinematics_els[xi] = el
+        if hasattr(self, "qDOF") and not hasattr(el, "qDOF"):
             num = self.element_number(xi)
-            mk.t0 = self.t0
-            mk.q0 = self.q0[self.elDOF[num]]
-            mk.qDOF = self.qDOF[self.elDOF[num]]
-            mk.uDOF = self.uDOF[self.elDOF_u[num]]
-        return mk
+            el.t0 = self.t0
+            el.q0 = self.q0[self.elDOF[num]]
+            el.qDOF = self.qDOF[self.elDOF[num]]
+            el.uDOF = self.uDOF[self.elDOF_u[num]]
+        return el
 
     @staticmethod
     def straight_configuration(
@@ -629,7 +629,7 @@ class DiscreteRod:
         return np.concatenate([r0, p0], axis=1).flatten()
 
     def assembler_callback(self):
-        for xi, mk in self._markers.items():
+        for xi, mk in self._kinematics_els.items():
             num = self.element_number(xi)
             mk.t0 = self.t0
             mk.q0 = self.q0[self.elDOF[num]]
@@ -802,68 +802,52 @@ class DiscreteRod:
     # r_OP / A_IB contribution
     ##########################
     def r_OP(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        mk = self.get_marker(xi)
-        return mk.r_OP(t, qe, B_r_CP)
+        return self.__get_el_kinematics(xi).r_OP(t, qe, B_r_CP)
 
     def r_OP_q(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        mk = self.get_marker(xi)
-        return mk.r_OP_q(t, qe, B_r_CP)
+        return self.__get_el_kinematics(xi).r_OP_q(t, qe, B_r_CP)
 
     def v_P(self, t, qe, ue, xi, B_r_CP=np.zeros(3, dtype=float)):
-        mk = self.get_marker(xi)
-        return mk.v_P(t, qe, ue, B_r_CP)
+        return self.__get_el_kinematics(xi).v_P(t, qe, ue, B_r_CP)
 
     def v_P_q(self, t, qe, ue, xi, B_r_CP=np.zeros(3, dtype=float)):
-        mk = self.get_marker(xi)
-        return mk.v_P_q(t, qe, ue, B_r_CP)
+        return self.__get_el_kinematics(xi).v_P_q(t, qe, ue, B_r_CP)
 
     def J_P(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        mk = self.get_marker(xi)
-        return mk.J_P(t, qe, B_r_CP)
+        return self.__get_el_kinematics(xi).J_P(t, qe, B_r_CP)
 
     def J_P_q(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        mk = self.get_marker(xi)
-        return mk.J_P_q(t, qe, B_r_CP)
+        return self.__get_el_kinematics(xi).J_P_q(t, qe, B_r_CP)
 
     def a_P(self, t, qe, ue, ue_dot, xi, B_r_CP=np.zeros(3, dtype=float)):
-        mk = self.get_marker(xi)
-        return mk.a_P(t, qe, ue, ue_dot, B_r_CP)
+        return self.__get_el_kinematics(xi).a_P(t, qe, ue, ue_dot, B_r_CP)
 
     def A_IB(self, t, qe, xi):
-        mk = self.get_marker(xi)
-        return mk.A_IB(t, qe)
+        return self.__get_el_kinematics(xi).A_IB(t, qe)
 
     def A_IB_q(self, t, qe, xi):
-        mk = self.get_marker(xi)
-        return mk.A_IB_q(t, qe)
+        return self.__get_el_kinematics(xi).A_IB_q(t, qe)
 
     def B_Omega(self, t, qe, ue, xi):
-        mk = self.get_marker(xi)
-        return mk.B_Omega(t, qe, ue)
+        return self.__get_el_kinematics(xi).B_Omega(t, qe, ue)
 
     def B_Omega_q(self, t, qe, ue, xi):
-        mk = self.get_marker(xi)
-        return mk.B_Omega_q(t, qe, ue)
+        return self.__get_el_kinematics(xi).B_Omega_q(t, qe, ue)
 
     def B_J_R(self, t, qe, xi):
-        mk = self.get_marker(xi)
-        return mk.B_J_R(t, qe)
+        return self.__get_el_kinematics(xi).B_J_R(t, qe)
 
     def B_J_R_q(self, t, qe, xi):
-        mk = self.get_marker(xi)
-        return mk.B_J_R_q(t, qe)
+        return self.__get_el_kinematics(xi).B_J_R_q(t, qe)
 
     def B_Psi(self, t, qe, ue, ue_dot, xi):
-        mk = self.get_marker(xi)
-        return mk.B_Psi(t, qe, ue, ue_dot)
+        return self.__get_el_kinematics(xi).B_Psi(t, qe, ue, ue_dot)
 
     def B_Psi_q(self, t, qe, ue, ue_dot, xi):
-        mk = self.get_marker(xi)
-        return mk.B_Psi_q(t, qe, ue, ue_dot)
+        return self.__get_el_kinematics(xi).B_Psi_q(t, qe, ue, ue_dot)
 
     def B_Psi_u(self, t, qe, ue, ue_dot, xi):
-        mk = self.get_marker(xi)
-        return mk.B_Psi_u(t, qe, ue, ue_dot)
+        return self.__get_el_kinematics(xi).B_Psi_u(t, qe, ue, ue_dot)
 
     def _eval_els(self, q):
         key = q.tobytes()
