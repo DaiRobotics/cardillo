@@ -148,7 +148,7 @@ class VisualDiscreteRod(_VisualTwinBase):
         q_rod = sol_i.q[rod.qDOF]
         q_nodes = rod._view_nodal_q(q_rod)
         r_OC_nodes = q_nodes[:, :3]
-        A_IB_nodes = np.asarray(math_jax.Exp_SO3_quat_batch(q_nodes[:, 3:], True))
+        A_IB_nodes = np.asarray(math_jax.Exp_SO3_quat_norm_batch(q_nodes[:, 3:]))
         control_pts = r_OC_nodes[:, None] + (A_IB_nodes @ self.control_pts).swapaxes(
             1, 2
         )
