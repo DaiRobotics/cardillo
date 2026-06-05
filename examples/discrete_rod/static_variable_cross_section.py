@@ -13,7 +13,7 @@ from cardillo.rods.cosseratRod import make_CosseratRod
 from cardillo.solver import Newton, SolverOptions
 from cProfile import Profile
 from cardillo.rods import CircularCrossSection
-from cardillo.rods.discreteRod import DiscreteRod
+from cardillo.rods import DiscreteRod
 
 
 def helix(

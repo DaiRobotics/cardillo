@@ -2,7 +2,7 @@ import numpy as np
 from jax import jit, vmap
 from jax import numpy as jnp
 
-from cardillo.rods.discreteRod import DiscreteRod
+from cardillo.rods import DiscreteRod
 
 
 class Force_line_distributed:
@@ -70,9 +70,11 @@ class Force_line_distributed:
     #####################
     def h(self, t, q, u):
         if self._is_discrete_rod:
-            return np.asarray(
-                self._h_nodes(t, self.rod.xi_node, self._h_weights)
-            ).ravel()
+            return (
+                (self._h_nodes(t, self.rod.xi_node, self._h_weights))
+                .__array__()
+                .ravel()
+            )
         else:
             h = np.zeros(self.rod.nu, dtype=np.common_type(q, u))
             for el in range(self.rod.nelement):

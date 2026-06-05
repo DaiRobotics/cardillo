@@ -6,31 +6,17 @@ from cardillo.math import ax2skew, cross3
 from cardillo.math.approx_fprime import approx_fprime
 
 
-def len_slice(x):
-    if isinstance(x, slice):
-        if x.step is None:
-            return x.stop - x.start
-        else:
-            (x.stop - x.start + x.step - 1) // x.step
-    else:
-        return len(x)
-
-
 def concatenate_qDOF(object):
     qDOF1 = object.subsystem1.qDOF
     qDOF2 = object.subsystem2.qDOF
     local_qDOF1 = object.subsystem1.local_qDOF_P(object.xi1)
     local_qDOF2 = object.subsystem2.local_qDOF_P(object.xi2)
+    qDOF1_part = qDOF1[local_qDOF1]
+    qDOF2_part = qDOF2[local_qDOF2]
 
-    object.qDOF = np.concatenate((qDOF1[local_qDOF1], qDOF2[local_qDOF2]))
-    if isinstance(local_qDOF1, slice):
-        object._nq1 = len_slice(local_qDOF1)
-    else:
-        object._nq1 = len(local_qDOF1)
-    if isinstance(local_qDOF2, slice):
-        object._nq2 = len_slice(local_qDOF2)
-    else:
-        object._nq2 = len(local_qDOF2)
+    object.qDOF = np.concatenate((qDOF1_part, qDOF2_part))
+    object._nq1 = len(local_qDOF1)
+    object._nq2 = len(qDOF2_part)
     object._nq = object._nq1 + object._nq2
 
     return local_qDOF1, local_qDOF2
@@ -41,11 +27,12 @@ def concatenate_uDOF(object):
     uDOF2 = object.subsystem2.uDOF
     local_uDOF1 = object.subsystem1.local_uDOF_P(object.xi1)
     local_uDOF2 = object.subsystem2.local_uDOF_P(object.xi2)
+    uDOF1_part = uDOF1[local_uDOF1]
+    uDOF2_part = uDOF2[local_uDOF2]
 
-    object.uDOF = np.concatenate((uDOF1[local_uDOF1], uDOF2[local_uDOF2]))
-    object._nu1 = nu1 = len_slice(local_uDOF1)
-    object._nu2 = nq1 = len_slice(local_uDOF2)
-    # object._nu2 = len(local_uDOF2)
+    object.uDOF = np.concatenate((uDOF1_part, uDOF2_part))
+    object._nu1 = len(uDOF1_part)
+    object._nu2 = len(uDOF2_part)
     object._nu = object._nu1 + object._nu2
 
     return local_uDOF1, local_uDOF2
@@ -389,82 +376,62 @@ class PositionOrientationBase:
         return self.subsystem2.J_P_q(t, q[self._nq1 :], self.xi2, self.B2_r_P2J0)
 
     def A_IB1(self, t, q):
-        # if self._t != t or self._q.tobytes() != q.tobytes():
+
         self._A_IB1 = self.subsystem1.A_IB(t, q[: self._nq1], self.xi1)
         return self._A_IB1
 
     def A_IB2(self, t, q):
-        # if self._t != t or self._q.tobytes() != q.tobytes():
+
         self._A_IB2 = self.subsystem2.A_IB(t, q[self._nq1 :], self.xi2)
         return self._A_IB2
 
     def A_IB_q1(self, t, q):
-        # if self._t != t or self._q.tobytes() != q.tobytes():
+
         self._A_IB_q1 = self.subsystem1.A_IB_q(t, q[: self._nq1], self.xi1)
         return self._A_IB_q1
 
     def A_IB_q2(self, t, q):
-        # if self._t != t or self._q.tobytes() != q.tobytes():
+
         self._A_IB_q2 = self.subsystem2.A_IB_q(t, q[self._nq1 :], self.xi2)
         return self._A_IB_q2
 
     def A_IJ1(self, t, q):
-        # if self._t != t or self._q.tobytes() != q.tobytes():
+
         self._A_IJ1 = self.A_IB1(t, q) @ self.A_K1J0
         return self._A_IJ1
 
     def A_IJ2(self, t, q):
-        # if self._t != t or self._q.tobytes() != q.tobytes():
+
         self._A_IJ2 = self.A_IB2(t, q) @ self.A_K2J0
         return self._A_IJ2
 
     def A_IJ1_q1(self, t, q):
-        # if self._t != t or self._q.tobytes() != q.tobytes():
+
         self._A_IJ1_q1 = self.A_K1J0.T @ self.A_IB_q1(t, q)
         return self._A_IJ1_q1
 
     def A_IJ2_q2(self, t, q):
-        # if self._t != t or self._q.tobytes() != q.tobytes():
+
         self._A_IJ2_q2 = self.A_K2J0.T @ self.A_IB_q2(t, q)
         return self._A_IJ2_q2
 
     def B_Omega1(self, t, q, u):
-        # if (
-        #     self._t != t
-        #     or self._q.tobytes() != q.tobytes()
-        #     or self._u.tobytes() != u.tobytes()
-        # ):
         self._B_Omega1 = self.subsystem1.B_Omega(
             t, q[: self._nq1], u[: self._nu1], self.xi1
         )
         return self._B_Omega1
 
     def B_Omega2(self, t, q, u):
-        # if (
-        #     self._t != t
-        #     or self._q.tobytes() != q.tobytes()
-        #     or self._u.tobytes() != u.tobytes()
-        # ):
         self._B_Omega2 = self.subsystem2.B_Omega(
             t, q[self._nq1 :], u[self._nu1 :], self.xi2
         )
         return self._B_Omega2
 
     def Omega1(self, t, q, u):
-        # if (
-        #     self._t != t
-        #     or self._q.tobytes() != q.tobytes()
-        #     or self._u.tobytes() != u.tobytes()
-        # ):
         self._Omega1 = self.A_IB1(t, q) @ self.B_Omega1(t, q, u)
         return self._Omega1
 
     def Omega2(self, t, q, u):
-        # if (
-        #     self._t != t
-        #     or self._q.tobytes() != q.tobytes()
-        #     or self._u.tobytes() != u.tobytes()
-        # ):
         self._Omega2 = self.A_IB2(t, q) @ self.B_Omega2(t, q, u)
         return self._Omega2
 

@@ -12,7 +12,7 @@ from cardillo.rods.force_line_distributed import Force_line_distributed
 
 from cardillo.system import System
 
-from cardillo.rods.discreteRod import DiscreteRod
+from cardillo.rods import DiscreteRod
 
 import cProfile
 

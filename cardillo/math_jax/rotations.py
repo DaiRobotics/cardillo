@@ -1,8 +1,7 @@
 import jax.numpy as jnp
 from jax import jit, jacfwd, vmap
 
-from .algebra import ax2skew, ax2skew_squared
-
+from .algebra import ax2skew
 
 eye3 = jnp.eye(3, dtype=jnp.float64)
 
@@ -21,12 +20,14 @@ def Exp_SO3_quat_norm(P):
     p0, p = P[0], P[1:]
     P2 = P @ P
 
-    return eye3 + (2.0 / P2) * (p0 * ax2skew(p) + ax2skew_squared(p))
+    p_tilde = ax2skew(p)
+    return eye3 + (2.0 / P2) * (p0 * ax2skew(p) + p_tilde @ p_tilde)
     # return jnp.where(
     #     normalize,
     #     eye3 + (2.0 / P2) * (p0 * ax2skew(p) + ax2skew_squared(p)),
     #     (p0**2 - p @ p) * eye3 + jnp.outer(p, 2.0 * p) + 2.0 * p0 * ax2skew(p),
     # )
+
 
 Exp_SO3_quat_norm_batch = jit(vmap(Exp_SO3_quat_norm))
 

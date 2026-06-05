@@ -6,7 +6,7 @@ from cardillo.forces import Force, TendonForce
 from cardillo.rods.force_line_distributed import Force_line_distributed
 
 from cardillo.rods import CircularCrossSection, CrossSectionInertias, Simo1986
-from cardillo.rods.discreteRod import DiscreteRod
+from cardillo.rods import DiscreteRod
 
 from cardillo.solver import Newton, ScipyDAE
 from cardillo.system import System
