@@ -2,21 +2,130 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import numpy as np
 from pathlib import Path
+from vtk import VTK_VERTEX
 
 from cardillo import System
 from cardillo.discrete import RigidBody, Frame, Sphere, Box
-from cardillo.math import axis_angle2quat, e3, cross3, A_IB_basic, ax2skew
+from cardillo.math import axis_angle2quat, e3, cross3, A_IB_basic, ax2skew, Log_SO3_quat
 from cardillo.math.approx_fprime import approx_fprime
 from cardillo.forces import Force
 from cardillo.solver import ScipyDAE
 
+class ControlledMazeBoard:
+    def __init__(
+        self,
+        name="mazaboard",
+        **kwargs,
+    ):
+        """Frame parameterized by time dependent position and orientation.
+
+        Parameters
+        ----------
+        r_OP : np.array(3) (callable/non-callable)
+            Frame position.
+        r_OP_t : np.array(3) (callable/non-callable)
+            Frame velocity.
+        r_OP_tt : np.array(3) (callable/non-callable)
+            Frame acceleration.
+        A_IB : np.array(3, 3) (callable/non-callable)
+            Frame orientation.
+        A_IB_t : np.array(3, 3) (callable/non-callable)
+            Time derivative of frame orientation.
+        A_IB_tt : np.array(3, 3) (callable/non-callable)
+            Second time derivative of frame orientation.
+        name : str
+            Name of frame.
+        """
+
+        self.nq = 2
+        self.q0 = np.zeros(2, float)
+        self.nu = 0
+        self.u0 = np.array([])
+
+        self.name = name
+
+    #####################
+    # kinematic equations
+    #####################
+    def q_dot(self, t, q, u):
+        # TODO: need to implement the motor velocity control laws
+        return q * 0
+
+    #####################
+    # auxiliary functions
+    #####################
+    def local_qDOF_P(self, xi=None):
+        return np.arange(2)
+
+    def local_uDOF_P(self, xi=None):
+        return np.array([])
+
+    def A_IB(self, t, q, xi=None):
+        return A_IB_basic(q[0]).x @ A_IB_basic(q[1]).y
+
+    def A_IB_q(self, t, q, xi=None):
+        return np.concatenate((A_IB_basic(q[0]).dx @ A_IB_basic(q[1]).y, A_IB_basic(q[0]).x @ A_IB_basic(q[1]).dy), axis=-1)
+
+    def r_OP(self, t, q, xi=None, B_r_CP=np.zeros(3)):
+        return self.A_IB(t, q) @ B_r_CP
+
+    def r_OP_q(self, t, q, xi=None, B_r_CP=np.zeros(3)):
+        return B_r_CP @ self.A_IB_q(t, q)
+
+    def v_P(self, t, q, u, xi=None, B_r_CP=np.zeros(3)):
+        return self.A_IB(t, q) @ cross3(self.B_Omega(t, q, u), B_r_CP)
+
+    def v_P_q(self, t, q, u, xi=None, B_r_CP=np.zeros(3)):
+        return cross3(self.B_Omega(t, q, u), B_r_CP) @ self.A_IB_q(t, q)
+
+    def J_P(self, t, q, xi=None, B_r_CP=np.zeros(3)):
+        return np.empty((3, 0))
+        return  -self.A_IB(t, q) @ ax2skew(B_r_CP) @ self.B_J_R(t, q)
+
+    def J_P_q(self, t, q, xi=None, B_r_CP=np.zeros(3)):
+        return np.empty((3, 0, 0))
+        raise NotImplementedError
+
+    def a_P(self, t, q, u, u_dot=None, xi=None, B_r_CP=np.zeros(3)):
+        raise NotImplementedError
+        return self.r_OP_tt__(t) + self.A_IB_tt__(t) @ B_r_CP
+
+    def a_P_q(self, t, q, u, u_dot=None, xi=None, B_r_CP=np.zeros(3)):
+        raise NotImplementedError
+        return np.empty((3, 0))
+
+    def a_P_u(self, t, q, u, u_dot=None, xi=None, B_r_CP=np.zeros(3)):
+        return np.empty((3, 0))
+
+    def B_Omega(self, t, q, u=None, xi=None):
+        q_dot = self.q_dot(t, q, u)
+        B_omega_IB = np.array([0, q_dot[1], 0]) + A_IB_basic(q[1]).y.T @ np.array([q_dot[0], 0, 0])
+        return B_omega_IB
+
+    def B_Omega_q(self, t, q, u=None, xi=None):
+        q_dot = self.q_dot(t, q, u)
+        B_Omega_q = np.zeros((3, 2))
+        B_Omega_q[:, 1] = A_IB_basic(q[1]).dy.T @ np.array([q_dot[0], 0, 0])
+        return B_Omega_q
+
+    def B_J_R(self, t, q, xi=None):
+        return np.empty((3, 0))
+        B_J_R = np.zeros((3, 2))
+        B_J_R[1, 1] = 1
+        B_J_R[:, 0] = A_IB_basic(q[1]).y.T @ np.array([1, 0, 0])
+        return B_J_R
+
+    def B_J_R_q(self, t, q, xi=None):
+        return np.empty((3, 0, 0))
+        raise NotImplementedError
+
 
 class RollingCondition:
-    """Rolling condition for rigid disc:
+    """Rolling condition for rigid ball:
     - impenetrability on position level.
     - nonholonomic no sliding on velocity level."""
 
-    def __init__(self, board: Frame, ball: RigidBody, la_g0=None, la_gamma0=None):
+    def __init__(self, board: ControlledMazeBoard|Frame, ball: RigidBody, la_g0=None, la_gamma0=None):
         self.mazeboard = board
         self.ball = ball
 
@@ -36,7 +145,7 @@ class RollingCondition:
         self.nu = self.nu1 + self.nu2
 
     def r_CP(self, t, q):
-        A_IB = self.mazeboard.A_IB(t)
+        A_IB = self.mazeboard.A_IB(t, q[self.nq1:])
 
         return -A_IB[:, 2] * self.ball.radius
 
@@ -45,21 +154,23 @@ class RollingCondition:
     #################
     def g(self, t, q):
         r_OC = self.ball.r_OP(t, q[: self.nq1])
-        r_OB = self.mazeboard.r_OP(t)
-        A_IB = self.mazeboard.A_IB(t)
+
+        r_OB = self.mazeboard.r_OP(t, q[self.nq1:])
+        A_IB = self.mazeboard.A_IB(t, q[self.nq1:])
+
         B_r_BC = A_IB.T @ (r_OC - r_OB)
         return e3 @ B_r_BC - self.ball.radius
 
     def g_dot(self, t, q, u):
         r_OC = self.ball.r_OP(t, q[: self.nq1])
 
-        r_OB = self.mazeboard.r_OP(t)
-        A_IB = self.mazeboard.A_IB(t)
+        r_OB = self.mazeboard.r_OP(t, q[self.nq1:])
+        A_IB = self.mazeboard.A_IB(t, q[self.nq1:])
 
         B_r_BC = A_IB.T @ (r_OC - r_OB)
-        v_C = self.ball.v_P(t, q, u)
-        v_B = self.mazeboard.v_P(t)
-        B_Omega_B = self.mazeboard.B_Omega(t)
+        v_C = self.ball.v_P(t, q[:self.nq1], u[:self.nu1])
+        v_B = self.mazeboard.v_P(t, q[self.nq1:], u[self.nu1:])
+        B_Omega_B = self.mazeboard.B_Omega(t, q[self.nq1:], u[self.nu1:])
         return e3 @ (A_IB.T @ (v_C - v_B) - cross3(B_Omega_B, B_r_BC))
 
     def g_dot_u(self, t, q):
@@ -69,17 +180,17 @@ class RollingCondition:
         g_dot_q = approx_fprime(
             q, lambda q: self.g_dot(t, q, u), method="cs", eps=1.0e-15
         )
-
-        return g_dot_q @ self.ball.q_dot(t, q, u) + self.g_dot_u(t, q) @ u_dot
+        q_dot = np.concatenate((self.ball.q_dot(t, q[:self.nq1], u[:self.nu1]), self.mazeboard.q_dot(t, q[self.nq1:], u[self.nu1:])))
+        return g_dot_q @ q_dot + self.g_dot_u(t, q) @ u_dot
 
     def g_q(self, t, q):
         return approx_fprime(
             q, lambda q: self.g(t, q), method="cs", eps=1.0e-15
-        ).reshape(self.nla_g, self.ball.nq)
+        ).reshape(self.nla_g, self.nq)
 
     def g_qq_dense(self, t, q):
         return approx_fprime(q, lambda q: self.g_q(t, q), method="3-point").reshape(
-            self.nla_g, self.ball.nq, self.ball.nq
+            self.nla_g, self.nq, self.nq
         )
 
     def g_q_T_mu_q(self, t, q, mu_g):
@@ -87,7 +198,7 @@ class RollingCondition:
 
     def g_dot_q(self, t, q, u):
         return approx_fprime(q, lambda q: self.g_dot(t, q, u)).reshape(
-            self.nla_g, self.ball.nq
+            self.nla_g, self.nq
         )
 
     def W_g(self, t, q):
@@ -97,10 +208,10 @@ class RollingCondition:
             q[: self.nq1],
         )
 
-        r_OB = self.mazeboard.r_OP(t)
-        J_P2 = self.mazeboard.J_P(t)
-        A_IB = self.mazeboard.A_IB(t)
-        B_J_R2 = self.mazeboard.B_J_R(t)
+        r_OB = self.mazeboard.r_OP(t, q[self.nq1:])
+        J_P2 = self.mazeboard.J_P(t, q[self.nq1:])
+        A_IB = self.mazeboard.A_IB(t, q[self.nq1:])
+        B_J_R2 = self.mazeboard.B_J_R(t, q[self.nq1:])
 
         B_r_BC = A_IB.T @ (r_OC - r_OB)
         J_P = np.zeros((3, self.nu))
@@ -121,8 +232,8 @@ class RollingCondition:
         r_OC = self.ball.r_OP(t, q[: self.nq1])
         A_IK = self.ball.A_IB(t, q[: self.nq1])
 
-        r_OB = self.mazeboard.r_OP(t)
-        A_IB = self.mazeboard.A_IB(t)
+        r_OB = self.mazeboard.r_OP(t, q[self.nq1:])
+        A_IB = self.mazeboard.A_IB(t, q[self.nq1:])
 
         r_CP = -A_IB[:, 2] * self.ball.radius
 
@@ -130,7 +241,7 @@ class RollingCondition:
         B_r_BP[2] = 0  # project to plane of maze board
 
         v_P = self.ball.v_P(t, q[: self.nq1], u[: self.nu1], B_r_CP=A_IK.T @ r_CP)
-        v_P2 = self.mazeboard.v_P(t, B_r_CP=B_r_BP)
+        v_P2 = self.mazeboard.v_P(t, q[self.nu1:], q[self.nu1:],B_r_CP=B_r_BP)
         return A_IB.T[:2] @ (v_P - v_P2)
 
     def gamma_dot(self, t, q, u, u_dot):
@@ -138,8 +249,9 @@ class RollingCondition:
             q, lambda q: self.gamma(t, q, u), method="cs", eps=1.0e-15
         )
         gamma_u = self.gamma_u(t, q)
-
-        return gamma_q @ self.ball.q_dot(t, q, u) + gamma_u @ u_dot
+        
+        q_dot = np.concatenate((self.ball.q_dot(t, q[:self.nq1], u[:self.nu1]), self.mazeboard.q_dot(t, q[self.nq1:], u[self.nu1:])))
+        return gamma_q @ q_dot + gamma_u @ u_dot
 
     def gamma_q(self, t, q, u):
         return approx_fprime(q, lambda q: self.gamma(t, q, u))
@@ -151,8 +263,8 @@ class RollingCondition:
         r_OC = self.ball.r_OP(t, q[: self.nq1])
         A_IK = self.ball.A_IB(t, q[: self.nq1])
 
-        r_OB = self.mazeboard.r_OP(t)
-        A_IB = self.mazeboard.A_IB(t)
+        r_OB = self.mazeboard.r_OP(t, q[self.nq1:])
+        A_IB = self.mazeboard.A_IB(t, q[self.nq1:])
 
         r_CP = -A_IB[:, 2] * self.ball.radius
 
@@ -160,7 +272,7 @@ class RollingCondition:
         B_r_BP[2] = 0  # project to plane of maze board
 
         J_P1 = self.ball.J_P(t, q[: self.nq1], B_r_CP=A_IK.T @ r_CP)
-        J_P2 = self.mazeboard.J_P(t, B_r_CP=B_r_BP)
+        J_P2 = self.mazeboard.J_P(t, q[self.nq1:], B_r_CP=B_r_BP)
         J_P = np.zeros((3, self.nu))
         J_P[:, : self.nu1] = J_P1
         J_P[:, self.nu1 :] = -J_P2
@@ -173,32 +285,15 @@ class RollingCondition:
         return approx_fprime(q, lambda q: self.gamma_u(t, q).T @ la_gamma)
 
 
-def disc(mass, radius, q0=None, u0=None):
-    width = radius / 100
-    A = 1 / 4 * mass * radius**2
-    C = 1 / 2 * mass * radius**2
-    B_Theta_C = np.diag(np.array([A, C, A]))
 
-    disc = Sphere(RigidBody)(
-        radius,
-        A_BM=A_IB_basic(-np.pi / 2).x,
-        B_r_CP=np.array([0, width / 2, 0]),
-        mass=mass,
-        B_Theta_C=B_Theta_C,
-        q0=q0,
-        u0=u0,
-    )
-    return disc
-
-
-def disc_boundary(disc, t, q, n=100):
+def ball_boundary(ball, t, q, n=100):
     phi = np.linspace(0, 2 * np.pi, n, endpoint=True)
-    B_r_CP = disc.radius * np.vstack([np.sin(phi), np.zeros(n), np.cos(phi)])
-    return np.repeat(disc.r_OP(t, q), n).reshape(3, n) + disc.A_IB(t, q) @ B_r_CP
+    B_r_CP = ball.radius * np.vstack([np.sin(phi), np.zeros(n), np.cos(phi)])
+    return np.repeat(ball.r_OP(t, q), n).reshape(3, n) + ball.A_IB(t, q) @ B_r_CP
 
 
 if __name__ == "__main__":
-    """Analytical analysis of the rolling motion of a disc, see Lesaux2005
+    """Analytical analysis of the rolling motion of a ball, see Lesaux2005
     Section 5 and 6.
 
     References
@@ -210,12 +305,12 @@ if __name__ == "__main__":
     # parameters
     ############
     gravity = 9.81  # gravity
-    m = 0.3048  # disc mass
+    m = 0.3048  # ball mass
 
-    # disc radius
+    # ball radius
     r = 0.05
 
-    # inertia of the disc, Lesaux2005 before (5.3)
+    # inertia of the ball, Lesaux2005 before (5.3)
     A = B = 0.25 * m * r**2
     C = 0.5 * m * r**2
 
@@ -288,24 +383,41 @@ if __name__ == "__main__":
         return A_IB_basic(np.deg2rad(30)).x
 
     R = 2
-    board = Box(Frame)(
+    # board = Box(Frame)(
+    #     dimensions=[2.2 * R, 2.2 * R, 0.0001],
+    #     name="floor",
+    #     A_IB=A_IB_floor,
+    # )
+    board = Box(ControlledMazeBoard)(
         dimensions=[2.2 * R, 2.2 * R, 0.0001],
         name="floor",
-        A_IB=A_IB_floor,
     )
 
-    # create disc
-    disc = disc(m, r, q0, u0)
+    # create ball
+    width = r / 100
+    A = 1 / 4 * m * r**2
+    C = 1 / 2 * m * r**2
+    B_Theta_C = np.diag(np.array([A, C, A]))
+
+    ball = Sphere(RigidBody)(
+        r,
+        A_BM=A_IB_basic(-np.pi / 2).x,
+        B_r_CP=np.array([0, width / 2, 0]),
+        mass=m,
+        B_Theta_C=B_Theta_C,
+        q0=q0,
+        u0=u0,
+    )
 
     # create rolling condition
-    rolling_condition = RollingCondition(board, disc)
+    rolling_condition = RollingCondition(board, ball)
 
     # gravity
-    f_g = Force(lambda t: np.array([0, 0, -m * gravity]), disc)
+    f_g = Force(lambda t: np.array([0, 0, -m * gravity]), ball)
 
     # assemble system
     system = System()
-    system.add(disc, rolling_condition, f_g, board)
+    system.add(ball, rolling_condition, f_g, board)
     system.assemble()
 
     ############
@@ -330,7 +442,7 @@ if __name__ == "__main__":
     # post-processing
     #################
     B_r_OP = np.array([board.A_IB(ti).T @ qi[:3] for ti, qi in zip(t, q)])
-    r_OP = sol.q[:, disc.qDOF]
+    r_OP = sol.q[:, ball.qDOF]
     fig, ax = plt.subplots(nrows=3, ncols=1, figsize=(10, 7))
     fig.suptitle("Evolution of constraint quantities")
     # g
@@ -377,7 +489,6 @@ if __name__ == "__main__":
     ax[3].grid()
 
     plt.tight_layout()
-    plt.show()
 
     from cardillo.visualization.vtk_render2 import Plotter
 
@@ -414,9 +525,9 @@ if __name__ == "__main__":
     q = q[::frac]
 
     def create(t, q):
-        x_S, y_S, z_S = disc.r_OP(t, q)
+        x_S, y_S, z_S = ball.r_OP(t, q)
 
-        A_IB = disc.A_IB(t, q)
+        A_IB = ball.A_IB(t, q)
         d1 = A_IB[:, 0] * r
         d2 = A_IB[:, 1] * r
         d3 = A_IB[:, 2] * r
@@ -445,17 +556,17 @@ if __name__ == "__main__":
             y_trace = deque([])
             z_trace = deque([])
 
-        x_S, y_S, z_S = disc.r_OP(t, q)
+        x_S, y_S, z_S = ball.r_OP(t, q)
 
-        x_bdry, y_bdry, z_bdry = disc_boundary(disc, t, q)
+        x_bdry, y_bdry, z_bdry = ball_boundary(ball, t, q)
 
-        x_t, y_t, z_t = disc.r_OP(t, q) + rolling_condition.r_CP(t, q)
+        x_t, y_t, z_t = ball.r_OP(t, q) + rolling_condition.r_CP(t, q)
 
         x_trace.append(x_t)
         y_trace.append(y_t)
         z_trace.append(z_t)
 
-        A_IB = disc.A_IB(t, q)
+        A_IB = ball.A_IB(t, q)
         d1 = A_IB[:, 0] * r
         d2 = A_IB[:, 1] * r
         d3 = A_IB[:, 2] * r
@@ -488,9 +599,9 @@ if __name__ == "__main__":
     )
 
     plt.show()
-    exit()
+    # exit()
     # vtk-export
     dir_name = Path(__file__).parent
     e = system.export(dir_name, "vtk", sol)
     # additionally export body fixed frame
-    e.export_contr(disc, file_name="A_IB", base_export=True)
+    e.export_contr(ball, file_name="A_IB", base_export=True)
