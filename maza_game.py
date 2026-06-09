@@ -9,13 +9,12 @@ from cardillo.discrete import RigidBody, Frame, Sphere, Box
 from cardillo.math import axis_angle2quat, e3, cross3, A_IB_basic, ax2skew, Log_SO3_quat
 from cardillo.math.approx_fprime import approx_fprime
 from cardillo.forces import Force
-from cardillo.solver import ScipyDAE
+from cardillo.solver import ScipyDAE, BackwardEuler, Moreau
 
 
-class ControlledMazeBoard:
+class MazeBoard:
     def __init__(
         self,
-        ball=None,
         name="mazaboard",
         **kwargs,
     ):
@@ -26,44 +25,38 @@ class ControlledMazeBoard:
         name : str
             Name of frame.
         """
-        self.ball = ball
-
-        self.nq = 2
-        self.q0 = np.zeros(2, float)
-        self.nu = 0
-        self.u0 = np.array([])
-        
-
         self.name = name
 
-    def assembler_callback(self):
-        self.qDOF = np.concatenate([self.my_qDOF, self.ball.qDOF])
-        self.nq1 = 2
+        self.nq = 2
+        self.nu = 2
+        self.q0 = np.zeros(2, float)
+        self.u0 = np.zeros(2, float)
+
+        self.constant_mass_matrix = True
 
     #####################
     # kinematic equations
     #####################
-    def q_dot(self, t, q, u):        
-        # TODO: need to implement the motor velocity control laws
-        q_dot = np.zeros(self.nq)
-        q_dot[0] = 1000 * (np.deg2rad(30) * np.sin(2 * np.pi * t / T) - q[0])
-        return q_dot
-    
-        # TODO: need to implement the motor velocity control laws
-        x, y = self.ball.r_OP(t, q[self.nq1:])[:2]
-        x_des, y_des = 0.2, 0
-        q_dot = np.zeros(self.nq)
-        q_dot[1] = np.deg2rad(5) * (x_des - x)
-        return q_dot
+    def q_dot(self, t, q, u):
+        return u
+
+    def q_dot_u(self, t, q):
+        return np.eye(2)
+
+    #####################
+    # equations of motion
+    #####################
+    def M(self, t, q):
+        return np.eye(2)
 
     #####################
     # auxiliary functions
     #####################
     def local_qDOF_P(self, xi=None):
-        return np.arange(2)
+        return np.arange(self.nq)
 
     def local_uDOF_P(self, xi=None):
-        return np.array([])
+        return np.arange(self.nu)
 
     def A_IB(self, t, q, xi=None):
         return A_IB_basic(q[0]).x @ A_IB_basic(q[1]).y
@@ -84,46 +77,144 @@ class ControlledMazeBoard:
         return B_r_CP @ self.A_IB_q(t, q)
 
     def v_P(self, t, q, u, xi=None, B_r_CP=np.zeros(3)):
-        q_dot = self.q_dot(t, q, u)
         A_IB_q = self.A_IB_q(t, q)
-        return A_IB_q @ q_dot @ B_r_CP
+        return A_IB_q @ u @ B_r_CP
 
     def v_P_q(self, t, q, u, xi=None, B_r_CP=np.zeros(3)):
         raise NotImplementedError
 
     def J_P(self, t, q, xi=None, B_r_CP=np.zeros(3)):
-        return np.empty((3, 0))
+        J_P = np.zeros((3, 2))
+        A_IB_q = self.A_IB_q(t, q)
+        J_P[:, 0] = A_IB_q @ np.array([1, 0]) @ B_r_CP
+        J_P[:, 1] = A_IB_q @ np.array([0, 1]) @ B_r_CP
+        return J_P
 
     def J_P_q(self, t, q, xi=None, B_r_CP=np.zeros(3)):
+        raise
         return np.empty((3, 0, 0))
 
-    def a_P(self, t, q, u, u_dot=None, xi=None, B_r_CP=np.zeros(3)):
+    def a_P(self, t, q, u, u_dot, xi=None, B_r_CP=np.zeros(3)):
         raise NotImplementedError
 
-    def a_P_q(self, t, q, u, u_dot=None, xi=None, B_r_CP=np.zeros(3)):
+    def a_P_q(self, t, q, u, u_dot, xi=None, B_r_CP=np.zeros(3)):
         raise NotImplementedError
 
-    def a_P_u(self, t, q, u, u_dot=None, xi=None, B_r_CP=np.zeros(3)):
+    def a_P_u(self, t, q, u, u_dot, xi=None, B_r_CP=np.zeros(3)):
         raise NotImplementedError
 
-    def B_Omega(self, t, q, u=None, xi=None):
-        q_dot = self.q_dot(t, q, u)
-        B_omega_IB = np.array([0, q_dot[1], 0]) + A_IB_basic(q[1]).y.T @ np.array(
-            [q_dot[0], 0, 0]
+    def B_Omega(self, t, q, u, xi=None):
+        B_omega_IB = np.array([0, u[1], 0]) + A_IB_basic(q[1]).y.T @ np.array(
+            [u[0], 0, 0]
         )
         return B_omega_IB
 
-    def B_Omega_q(self, t, q, u=None, xi=None):
-        q_dot = self.q_dot(t, q, u)
+    def B_Omega_q(self, t, q, u, xi=None):
         B_Omega_q = np.zeros((3, 2))
-        B_Omega_q[:, 1] = A_IB_basic(q[1]).dy.T @ np.array([q_dot[0], 0, 0])
+        B_Omega_q[:, 1] = A_IB_basic(q[1]).dy.T @ np.array([u[0], 0, 0])
         return B_Omega_q
 
     def B_J_R(self, t, q, xi=None):
-        return np.empty((3, 0))
+        B_J_R = np.zeros((3, 2))
+        B_J_R[:, 0] = A_IB_basic(q[1]).y.T @ np.array([1, 0, 0])
+        B_J_R[1, 1] = 1
+        return B_J_R
 
     def B_J_R_q(self, t, q, xi=None):
-        return np.empty((3, 0, 0))
+        B_J_R_q = np.zeros((3, 2, 2))
+        B_J_R_q[:, 0, 1] = A_IB_basic(q[1]).dy.T @ np.array([1, 0, 0])
+        return B_J_R_q
+
+
+class MazeBoardController:
+    def __init__(self, ball: RigidBody, board: MazeBoard):
+        self.ball = ball
+        self.board = board
+        self.Kd_angle = 1e3
+        self.Kp_angle = 0.25 * self.Kd_angle**2
+        self.q_des = np.zeros(2)
+
+    def assembler_callback(self):
+        self.qDOF = np.concatenate((self.board.qDOF, self.ball.qDOF))
+        self.uDOF = np.concatenate((self.board.uDOF, self.ball.uDOF))
+        self.nq1 = len(self.board.qDOF)
+        self.nu1 = len(self.board.uDOF)
+        self.nq = len(self.qDOF)
+        self.nu = len(self.uDOF)
+
+    def step_callback(self, t, q, u):
+        self.ball_control(t, q, u)
+        return q, u
+
+    @staticmethod
+    def ball_traj(t):
+        T = 5
+        rho = 0.02
+        x = rho * (np.cos(2 * np.pi * t / T) - 1)
+        x_t = -(2 * np.pi / T) * rho * np.sin(2 * np.pi * t / T)
+        x_tt = -((2 * np.pi / T) ** 2) * rho * np.cos(2 * np.pi * t / T)
+        y = rho * np.sin(2 * np.pi * t / T)
+        y_t = (2 * np.pi / T) * rho * np.cos(2 * np.pi * t / T)
+        y_tt = -((2 * np.pi / T) ** 2) * rho * np.sin(2 * np.pi * t / T)
+        r_ref = np.array([x, y])
+        r_ref_t = np.array([x_t, y_t])
+        r_ref_tt = np.array([x_tt, y_tt])
+
+        # r_ref = np.array([x, y * 0])
+        # r_ref_t = np.array([x_t, y_t * 0])
+        # r_ref_tt = np.array([x_tt,  y_tt * 0])
+
+        # r_ref = np.array([0.02, 0])
+        # r_ref_t = np.zeros_like(r_ref)
+        # r_ref_tt = np.zeros_like(r_ref)
+        return r_ref, r_ref_t, r_ref_tt
+
+    def ball_control(self, t, q, u):
+        # board
+        B_Omega_B = self.board.B_Omega(t, q[: self.nq1], u[: self.nq1])
+        r_OB = self.board.r_OP(t, q[: self.nq1])
+        A_IB = self.board.A_IB(t, q[: self.nq1])
+        v_B = self.board.v_P(t, q[: self.nq1], u[: self.nu1])
+
+        # ball
+        r_OC = self.ball.r_OP(t, q[self.nq1 :])
+        v_C = self.ball.v_P(t, q[self.nq1 :], u[self.nu1 :])
+        B_Omega_B = self.board.B_Omega(t, q[: self.nq1], u[: self.nu1])
+
+        B_r_BC = A_IB.T @ (r_OC - r_OB)
+        B_r_BC_t = A_IB.T @ (v_C - v_B) - cross3(B_Omega_B, B_r_BC)
+
+        # PD Controller for ball position
+        r = B_r_BC[:2]
+        r_t = B_r_BC_t[:2]
+        r_ref, r_ref_t, r_ref_tt = self.ball_traj(t)
+        # desired angles
+        err = r_ref - r
+        err_t = r_ref_t - r_t
+        self.q_des[0] = -(r_ref_tt[1] + 5 * err_t[1] + 0.25 * 25 * err[1]) / 9.81
+        self.q_des[1] = (r_ref_tt[0] + 5 * err_t[0] + 0.25 * 25 * err[0]) / 9.81
+
+    def angle_control(self, t, q, u):
+        u_des = np.zeros(2)
+        return self.Kd_angle * (u_des - u[: self.nu1]) + self.Kp_angle * (
+            self.q_des - q[: self.nq1]
+        )
+
+    def h(self, t, q, u):
+        # PD Controller for board angles
+        h = np.zeros(self.nu)
+        h[: self.nu1] = self.angle_control(t, q, u)
+        return h
+
+    def h_q(self, t, q, u):
+        h_q = np.zeros((self.nu, self.nq))
+        h_q[: self.nu1, : self.nq1] = -np.eye(2) * self.Kp_angle
+        return h_q
+
+    def h_u(self, t, q, u):
+        h_u = np.zeros((self.nu, self.nu))
+        h_u[: self.nu1, : self.nu1] = -np.eye(2) * self.Kd_angle
+        return h_u
 
 
 class RollingCondition:
@@ -133,7 +224,7 @@ class RollingCondition:
 
     def __init__(
         self,
-        board: ControlledMazeBoard | Frame,
+        board: MazeBoard,
         ball: RigidBody,
         la_g0=None,
         la_gamma0=None,
@@ -258,7 +349,7 @@ class RollingCondition:
         B_r_BP[2] = 0  # project to plane of maze board
 
         v_P = self.ball.v_P(t, q[: self.nq1], u[: self.nu1], B_r_CP=A_IK.T @ r_CP)
-        v_P2 = self.mazeboard.v_P(t, q[self.nq1 :], q[self.nu1 :], B_r_CP=B_r_BP)
+        v_P2 = self.mazeboard.v_P(t, q[self.nq1 :], u[self.nu1 :], B_r_CP=B_r_BP)
         return A_IB.T[:2] @ (v_P - v_P2)
 
     def gamma_dot(self, t, q, u, u_dot):
@@ -329,56 +420,26 @@ if __name__ == "__main__":
     # parameters
     ############
     gravity = 9.81  # gravity
-    m = 0.3048  # ball mass
+    m = 0.01  # ball mass
 
     # ball radius
-    r = 0.05
-
-    # inertia of the ball, Lesaux2005 before (5.3)
-    A = B = 0.25 * m * r**2
-    C = 0.5 * m * r**2
+    r = 5e-3
 
     ####################
     # initial conditions
     ####################
-    case = "spinning"
-    case = "rolling"
+    # inclination angle is 0
+    beta0 = 0
+    beta_dot0 = 0
 
-    if case == "spinning":
-        # inclination angle is 0
-        beta0 = 0
-        beta_dot0 = 0
+    # initial rolling velocity
+    gamma_dot0 = 0
 
-        # initial rolling velocity
-        gamma_dot0 = 0
-        # initial spinning velocity
-        alpha_dot0 = 1
+    # initial spinning velocity
+    alpha_dot0 = 0
 
-        # simulation time
-        t1 = 2 * np.pi / np.abs(alpha_dot0)
-
-    elif case == "rolling":
-        # inclination angle is 0
-        beta0 = 0
-        beta_dot0 = 0
-
-        # initial rolling velocity
-        gamma_dot0 = 0
-        # initial spinning velocity
-        alpha_dot0 = 0
-
-        # simulation time
-        t1 = 2  # simulation time
-
-    else:
-        raise ValueError(
-            f"Invalid initial condition case: '{case}'. Valid cases are 'spinning', 'rolling', 'circular'."
-        )
-
-    # center of mass
-    x0 = 0
-    y0 = -r * np.sin(np.deg2rad(0))
-    z0 = r * np.cos(np.deg2rad(0))
+    # simulation time
+    t1 = 10  # simulation time
 
     # angular velocity
     B_Omega0 = np.array(
@@ -393,7 +454,7 @@ if __name__ == "__main__":
     # initial conditions
     t0 = 0
     p0 = axis_angle2quat(np.array([1, 0, 0]), beta0)
-    q0 = np.array((x0, y0, z0, *p0))
+    q0 = np.array((0, 0, r, *p0))
     u0 = np.concatenate((v_C0, B_Omega0))
 
     #################
@@ -401,14 +462,13 @@ if __name__ == "__main__":
     #################
     # create ball
     width = r / 100
-    A = 1 / 4 * m * r**2
-    C = 1 / 2 * m * r**2
-    B_Theta_C = np.diag(np.array([A, C, A]))
+    A = 0.25 * m * r**2
+    B_Theta_C = np.diag(np.array([A, A, A]))
 
     ball = Sphere(RigidBody)(
         r,
         A_BM=A_IB_basic(-np.pi / 2).x,
-        B_r_CP=np.array([0, width / 2, 0]),
+        # B_r_CP=np.array([0, width / 2, 0]),
         mass=m,
         B_Theta_C=B_Theta_C,
         q0=q0,
@@ -422,17 +482,18 @@ if __name__ == "__main__":
         return A_IB_basic(np.deg2rad(30) * np.sin(2 * np.pi * t / T)).x
         return A_IB_basic(np.deg2rad(30)).x
 
-    R = 2
+    R = 0.1
     # board = Box(Frame)(
     #     dimensions=[2.2 * R, 2.2 * R, 0.0001],
     #     name="maza_board",
     #     A_IB=A_IB_maza_board,
     # )
-    board = Box(ControlledMazeBoard)(
-        ball=ball,
+    board = Box(MazeBoard)(
         dimensions=[2.2 * R, 2.2 * R, 0.0001],
         name="maza_board",
     )
+
+    board_controller = MazeBoardController(ball, board)
 
     # create rolling condition
     rolling_condition = RollingCondition(board, ball)
@@ -442,7 +503,7 @@ if __name__ == "__main__":
 
     # assemble system
     system = System()
-    system.add(ball, rolling_condition, f_g, board)
+    system.add(ball, f_g, board, rolling_condition, board_controller)
     system.assemble()
 
     ############
@@ -450,7 +511,8 @@ if __name__ == "__main__":
     ############
     dt = 2.0e-2  # time step
 
-    sol = ScipyDAE(system, t1, dt).solve()
+    # sol = BackwardEuler(system, t1, dt).solve()
+    sol = BackwardEuler(system, t1, dt).solve()
 
     # read solution
     t = sol.t  # time
@@ -466,27 +528,52 @@ if __name__ == "__main__":
     #################
     # post-processing
     #################
-    B_r_OP = np.array(
-        [board.A_IB(ti, qi[board.qDOF]).T @ qi[:3] for ti, qi in zip(t, q)]
-    )
-    r_OP = sol.q[:, ball.qDOF]
-    fig, ax = plt.subplots(nrows=3, ncols=1, figsize=(10, 7))
-    fig.suptitle("Evolution of constraint quantities")
+
+    # board
+    r_OB = np.array([board.r_OP(ti, qi[board.qDOF]) for ti, qi in zip(t, q)])
+    A_IB = np.array([board.A_IB(ti, qi[board.qDOF]) for ti, qi in zip(t, q)])
+
+    # ball
+    r_OC = np.array([ball.r_OP(ti, qi[ball.qDOF]) for ti, qi in zip(t, q)])
+    B_r_BC = np.array([A.T @ (r1 - r2) for A, r1, r2 in zip(A_IB, r_OC, r_OB)])
+
+    fig, ax = plt.subplots(nrows=3, ncols=2, figsize=(10, 7))
+    fig.suptitle("Position")
+
+    traj = np.array(list(map(MazeBoardController.ball_traj, t)))
+    r_ref, r_ref_t, r_ref_tt = np.swapaxes(traj, 0, 1)
     # g
-    ax[0].plot(t, r_OP[:, 0])
-    ax[0].set_xlabel("$t$")
-    ax[0].set_ylabel("$x$")
-    ax[0].grid()
+    ax[0, 0].plot(t, r_ref[:, 0], "-r")
+    ax[0, 0].plot(t, B_r_BC[:, 0])
+    ax[0, 0].set_xlabel("$t$")
+    ax[0, 0].set_ylabel("$x$")
+    ax[0, 0].grid()
 
-    ax[1].plot(t, r_OP[:, 1])
-    ax[1].set_xlabel("$t$")
-    ax[1].set_ylabel("$y$")
-    ax[1].grid()
+    ax[0, 1].plot(t, r_ref[:, 1], "-r")
+    ax[0, 1].plot(t, B_r_BC[:, 1])
+    ax[0, 1].set_xlabel("$t$")
+    ax[0, 1].set_ylabel("$y$")
+    ax[0, 1].grid()
 
-    ax[2].plot(t, r_OP[:, 2])
-    ax[2].set_xlabel("$t$")
-    ax[2].set_ylabel("$z$")
-    ax[2].grid()
+    ax[1, 0].plot(t, np.rad2deg(q[:, board.qDOF[0]]))
+    ax[1, 0].set_xlabel("$t$")
+    ax[1, 0].set_ylabel("$alpha$")
+    ax[1, 0].grid()
+
+    ax[1, 1].plot(t, np.rad2deg(q[:, board.qDOF[1]]))
+    ax[1, 1].set_xlabel("$t$")
+    ax[1, 1].set_ylabel("$beta$")
+    ax[1, 1].grid()
+
+    ax[2, 0].plot(t, np.rad2deg(u[:, board.uDOF[0]]))
+    ax[2, 0].set_xlabel("$t$")
+    ax[2, 0].set_ylabel("$alpha dot$")
+    ax[2, 0].grid()
+
+    ax[2, 1].plot(t, np.rad2deg(u[:, board.uDOF[1]]))
+    ax[2, 1].set_xlabel("$t$")
+    ax[2, 1].set_ylabel("$beta dot$")
+    ax[2, 1].grid()
 
     # plots
     fig, ax = plt.subplots(nrows=4, ncols=1, figsize=(10, 7))
