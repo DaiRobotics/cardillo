@@ -126,7 +126,7 @@ class MazeBoard:
         return B_J_R_q
 
 
-class MazeBoardController:
+class Controller:
     def __init__(self, ball: RigidBody, board: MazeBoard):
         self.ball = ball
         self.board = board
@@ -493,7 +493,6 @@ if __name__ == "__main__":
         name="maza_board",
     )
 
-    board_controller = MazeBoardController(ball, board)
 
     # create rolling condition
     rolling_condition = RollingCondition(board, ball)
@@ -501,9 +500,12 @@ if __name__ == "__main__":
     # gravity
     f_g = Force(lambda t: np.array([0, 0, -m * gravity]), ball)
 
+    # controller
+    controller = Controller(ball, board)
+
     # assemble system
     system = System()
-    system.add(ball, f_g, board, rolling_condition, board_controller)
+    system.add(ball, f_g, board, rolling_condition, controller)
     system.assemble()
 
     ############
@@ -540,7 +542,7 @@ if __name__ == "__main__":
     fig, ax = plt.subplots(nrows=3, ncols=2, figsize=(10, 7))
     fig.suptitle("Position")
 
-    traj = np.array(list(map(MazeBoardController.ball_traj, t)))
+    traj = np.array(list(map(Controller.ball_traj, t)))
     r_ref, r_ref_t, r_ref_tt = np.swapaxes(traj, 0, 1)
     # g
     ax[0, 0].plot(t, r_ref[:, 0], "-r")
