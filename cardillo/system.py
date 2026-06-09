@@ -391,6 +391,8 @@ class System:
     #####################
     def M(self, t, q, format="coo", coo=None):
         if self.constant_mass_matrix:
+            return self._M0.asformat(format)
+        else:
             if coo is None:
                 coo = CooMatrix((self.nu, self.nu))
                 coo[:, :] = self._M0
@@ -399,8 +401,6 @@ class System:
             ):  # only loop over variable mass parts
                 coo[i, contr.uDOF, contr.uDOF] = contr.M(t, q[contr.qDOF])
             return coo.asformat(format)
-        else:
-            return self._M0.asformat(format)
 
     def Mu_q(self, t, q, u, format="coo", coo=None):
         if coo is None:
