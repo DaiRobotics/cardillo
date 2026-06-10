@@ -1,9 +1,8 @@
-import warnings
+import numpy as np
+from numpy import tile, atleast_1d, arange, ndarray
 from scipy.sparse import csc_array, csr_array, coo_array
 from scipy.sparse._sputils import isshape, check_shape
 from scipy.sparse import spmatrix, sparray
-import numpy as np
-from numpy import tile, atleast_1d, arange, ndarray
 
 
 class CooMatrix:

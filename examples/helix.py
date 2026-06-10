@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 
 from cardillo import System
-from cardillo import RigidConnection
+from cardillo.rigid_connection import RigidConnection
 from cardillo.forces import B_Moment
 from cardillo.math import e1, e3
 from cardillo.rods import CircularCrossSection
@@ -16,7 +16,7 @@ from cardillo.rods.discreteRod import DiscreteRod
 if __name__ == "__main__":
     slenderness = 1e2
     n_load_steps = 10
-    VTK_eqxport = False
+    VTK_export = False
 
     name = "helix"
     n_coil = 2
@@ -176,7 +176,6 @@ if __name__ == "__main__":
         ]
     )
 
-
     fig = plt.figure()
     ax1 = fig.add_subplot(1, 1, 1, projection="3d")
 
@@ -200,13 +199,10 @@ if __name__ == "__main__":
     axes = fig.subplots(2, 1, sharex=True)
     ax1 = axes[0]
     ax2 = axes[1]
-    # ax1.plot(la_c[:, 0], "-r", label=r"$_B n_1$")
-    # ax1.plot(la_c[:, 1], "-g", label=r"$_B n_2$")
-    # ax1.plot(la_c[:, 2], "-b", label=r"$_B n_3$")
     ax1.plot(indices, la_c[:, 3], "-m", label=r"$_B m_1$")
     ax1.set_ylabel(r"$_B m_1$")
     ax1.grid()
-    # ax2.plot(la_c[:, 4], "-c", label=r"$_B m_2$")
+
     ax2.plot(indices, la_c[:, 5], "-y", label=r"$_B m_3$")
     ax2.set_ylabel(r"$_B m_3$")
     ax2.set_xlabel(r"element index")

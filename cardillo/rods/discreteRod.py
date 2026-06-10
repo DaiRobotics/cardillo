@@ -68,7 +68,6 @@ def _combine_indices(rows_list, cols_list):
     return ptr, rows_combined, cols_combined
 
 
-
 class ElementKinematics:
     def __init__(self, xi, alpha):
         self.xi = xi
@@ -272,6 +271,7 @@ def _B_Omega(alpha, u):
     B_Omega_1 = u[3:6]
     B_Omega_2 = u[9:12]
     return B_Omega_1 + alpha * (B_Omega_2 - B_Omega_1)
+
 
 class DiscreteRod:
     def __init__(

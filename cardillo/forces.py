@@ -1,9 +1,9 @@
 import numpy as np
-from ..math import norm, outer3
-from ..utility.coo_matrix import CooMatrix
-from ..utility.cachetools import MyLRUCache
+from .math import norm, outer3
+from .utility.coo_matrix import CooMatrix
+from .utility.cachetools import MyLRUCache
 
-from ..visualization import VisualTendon
+from .visualization import VisualTendon
 
 
 class TendonForce:
@@ -214,3 +214,82 @@ class TendonForce:
             self.visual_twin = VisualTendon(self, radius=1e-3, color=(0, 200, 50))
         self.visual_twin.update_visual_state(sol_i)
         return self.visual_twin._poly_data
+
+
+class Force:
+    r"""Force represented w.r.t. I-basis
+
+    Parameters
+    ----------
+    force : np.ndarray (3,)
+        Force w.r.t. inertial I-basis as a callable function of time t.
+    subsystem : object
+        Object on which force acts.
+    xi : #TODO
+    B_r_CP : np.ndarray (3,)
+        Position vector of point of attack (P) w.r.t. center of mass (C) in body-fixed B-basis.
+    name : str
+        Name of contribution.
+    """
+
+    def __init__(
+        self, force, subsystem, xi=np.zeros(3), B_r_CP=np.zeros(3), name="force"
+    ):
+        if not callable(force):
+            self.force = lambda t: force
+        else:
+            self.force = force
+        self.subsystem = subsystem
+        self.xi = xi
+        self.name = name
+
+        self.r_OP = lambda t, q: subsystem.r_OP(t, q, xi, B_r_CP)
+        self.J_P = lambda t, q: subsystem.J_P(t, q, xi, B_r_CP)
+        self.J_P_q = lambda t, q: subsystem.J_P_q(t, q, xi, B_r_CP)
+
+    def assembler_callback(self):
+        self.qDOF = self.subsystem.qDOF[self.subsystem.local_qDOF_P(self.xi)]
+        self.uDOF = self.subsystem.uDOF[self.subsystem.local_uDOF_P(self.xi)]
+
+    def h(self, t, q, u):
+        return self.force(t) @ self.J_P(t, q)
+
+    def h_q(self, t, q, u):
+        return np.einsum("i,ijk->jk", self.force(t), self.J_P_q(t, q))
+
+
+class B_Moment:
+    r"""Moment represented w.r.t. body-fixed B-basis
+
+    Parameters
+    ----------
+    moment : np.ndarray (3,)
+        Moment w.r.t. body-fixed B-basis as a callable function of time t.
+    subsystem : object
+        Object on which moment acts.
+    xi : #TODO
+    name : str
+        Name of contribution.
+    """
+
+    def __init__(self, moment, subsystem, xi=np.zeros(3), name="moment"):
+        if not callable(moment):
+            self.moment = lambda t: moment
+        else:
+            self.moment = moment
+        self.subsystem = subsystem
+        self.xi = xi
+        self.name = name
+
+        self.B_J_R = lambda t, q: subsystem.B_J_R(t, q, xi=xi)
+        self.B_J_R_q = lambda t, q: subsystem.B_J_R_q(t, q, xi=xi)
+
+    def assembler_callback(self):
+        self.qDOF = self.subsystem.qDOF[self.subsystem.local_qDOF_P(self.xi)]
+        self.uDOF = self.subsystem.uDOF[self.subsystem.local_uDOF_P(self.xi)]
+
+    def h(self, t, q, u):
+        return self.moment(t) @ self.B_J_R(t, q)
+
+    def h_q(self, t, q, u):
+        return np.einsum("i,ijk->jk", self.moment(t), self.B_J_R_q(t, q))

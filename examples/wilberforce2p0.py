@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation
 
 from cardillo import System
-from cardillo import RigidConnection
-from cardillo import RigidBody
+from cardillo.rigid_connection import RigidConnection
+from cardillo.rigid_body import RigidBody
 from cardillo.forces import Force
 from cardillo.math import e3
 from cardillo.rods import (
@@ -22,11 +22,9 @@ from cardillo.rods.discreteRod import DiscreteRod
 if __name__ == "__main__":
     dir_name = Path(sys.argv[0]).parent
 
-    # nturns = 3  # number of coils
-    # nturns = 10  # number of coils
     nturns = 20  # number of coils Harsch2021
 
-    t1 = 20  #
+    t1 = 20
 
     #########
     # gravity
@@ -117,8 +115,6 @@ if __name__ == "__main__":
     ##############
     # pendulum bob
     ##############
-    # R = 23e-3  # radius of the main cylinder
-    # h = 36e-3  # height of the main cylinder
     R = 25e-3  # radius of the main cylinder
     h = 34e-3  # height of the main cylinder
     density = 7850  # [kg / m^3]; steel
@@ -140,7 +136,6 @@ if __name__ == "__main__":
         * mass
     )
     bob = RigidBody(mass=mass, B_Theta_C=B_Theta_C, q0=q0)
-    # bob = RigidBody(mass_bob, K_Theta_S_bob, q0=q0)
 
     system = System()
 
@@ -225,17 +220,6 @@ if __name__ == "__main__":
         ]
     )
     angles = np.unwrap(angles, axis=0)
-
-    # Export for pgfplots
-    data = np.column_stack([t[::10], r_OS[::10, 2], np.rad2deg(angles[::10, 0])])
-    dir_name = Path(sys.argv[0]).parent
-    # np.savetxt(
-    #     dir_name / ".." / "latex src" / "figures" / "data_wilberforce2p0.csv",
-    #     data,
-    #     delimiter=",",
-    #     header="t,z,alpha",
-    #     comments="",
-    # )
 
     ###############
     # visualization

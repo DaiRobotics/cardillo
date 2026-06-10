@@ -2,7 +2,7 @@ import numpy as np
 import sys
 from pathlib import Path
 
-from cardillo import RigidConnection
+from cardillo.rigid_connection import RigidConnection
 from cardillo.forces import TendonForce
 
 from cardillo.rods import CircularCrossSection
@@ -11,17 +11,15 @@ from cardillo.rods.discreteRod import DiscreteRod
 from cardillo.solver import Newton, SolverOptions
 from cardillo.system import System
 
+
+from matplotlib import pyplot as plt
+
 if __name__ == "__main__":
     rod_nelement = 100  # number of elements for the rod discretization
     VTK_export = False
-    csv_export = False
     # ---- parameters ----
     rod_r0 = 30e-3  # [m] rod radius
     rod_l0 = 95e-3  # [m] length of the rod
-    # rod_m = 0.433 * 2  # [kg] mass of the rod
-    # density = rod_m / (
-    # np.pi * rod_r0**2 * rod_l0
-    # )  # [kg/m^3] density of the rod material
     rod_r_ratio = (
         0.4  # radius ratio of the rod along its length (tip radius / base radius)
     )
@@ -43,13 +41,11 @@ if __name__ == "__main__":
     E, G = 7e5, 2e5
 
     # generate initial configuration
-    Rod = DiscreteRod
-
     def r_OP(xi):
         return np.array([xi * rod_l_new, 0, 0], dtype=np.float64)
 
     A_IB = lambda xi: np.eye(3, dtype=np.float64)
-    q0 = Rod.pose_configuration(
+    q0 = DiscreteRod.pose_configuration(
         rod_nelement,
         r_OP,
         A_IB,
@@ -57,7 +53,7 @@ if __name__ == "__main__":
     )
     Q = q0.copy()
 
-    rod = Rod(
+    rod = DiscreteRod(
         cross_section,
         E,
         G,
@@ -71,24 +67,22 @@ if __name__ == "__main__":
 
     # ---- tendons ----
     B_r_CP_list = [
-            rod_A_IB0.T
-            @ np.array(
-                [
-                    radius(xi) * np.cos(0),
-                    radius(xi) * np.sin(0),
-                    0,
-                ]
-            )
-            for xi in np.linspace(
-                0, 1, rod_nelement + 1
-            )
-        ]
+        rod_A_IB0.T
+        @ np.array(
+            [
+                radius(xi) * np.cos(0),
+                radius(xi) * np.sin(0),
+                0,
+            ]
+        )
+        for xi in np.linspace(0, 1, rod_nelement + 1)
+    ]
     tendons = []
     n = len(B_r_CP_list)
     tendon = TendonForce(
         subsystem_list=[rod for _ in range(n)],
         connectivity=[(i, i + 1) for i in range(n - 1)],
-        xi_list=[i/(n - 1) for i in range(n)],
+        xi_list=[i / (n - 1) for i in range(n)],
         B_r_CP_list=B_r_CP_list,
     )
     tendons.append(tendon)
@@ -168,8 +162,6 @@ if __name__ == "__main__":
     ########
     # plot #
     ########
-    from matplotlib import pyplot as plt
-
     t = sol.t
     q_nodes = sol.q[:, rod.qDOF].reshape((-1, rod.nnode, 7))
     plt.plot(q_nodes[:, -1, 0], q_nodes[:, -1, 2])
@@ -206,4 +198,4 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.show(block=True)
 
-    plotter.render_solution(sol, True, play_speed_up=0.1)
+    plotter.render_solution(sol, True, play_speed_up=0.5)

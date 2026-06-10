@@ -1,7 +1,8 @@
 import numpy as np
 from vtk import VTK_VERTEX
-from cardillo.math import skew2ax, Log_SO3_quat
-from cardillo.utility.check_time_derivatives import check_time_derivatives
+
+from .math import skew2ax, Log_SO3_quat
+from .utility.check_time_derivatives import check_time_derivatives
 
 
 class Frame:

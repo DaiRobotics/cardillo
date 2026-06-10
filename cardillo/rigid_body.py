@@ -1,7 +1,7 @@
 import numpy as np
 from vtk import VTK_VERTEX
 
-from cardillo.math import (
+from .math import (
     cross3,
     ax2skew,
     norm,

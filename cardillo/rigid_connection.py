@@ -2,7 +2,7 @@ import warnings
 
 import numpy as np
 
-from cardillo.math import ax2skew, cross3
+from .math import ax2skew, cross3
 from .rods.discreteRod import DiscreteRod
 
 

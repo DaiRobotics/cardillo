@@ -9,7 +9,6 @@ from cardillo.solver.solution import Solution
 from cardillo import math_jax
 
 
-
 class VisualDiscreteRod:
     def __init__(
         self,

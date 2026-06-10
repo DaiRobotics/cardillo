@@ -3,8 +3,8 @@ from scipy.sparse import eye_array
 from scipy_dae.integrate import solve_dae
 from tqdm import tqdm
 
-from cardillo.solver import Solution
 from cardillo.utility.coo_matrix import CooMatrix
+from .solution import Solution
 
 
 # TODO:

@@ -2,10 +2,10 @@ import numpy as np
 from scipy.sparse import bmat
 from scipy.sparse.linalg import splu
 
-from cardillo.utility.coo_matrix import CooMatrix
-from cardillo import Frame
-from cardillo.visualization import Export
-from cardillo.solver import SolverOptions
+from .frame import Frame
+from .utility.coo_matrix import CooMatrix
+from .visualization import Export
+from .solver import SolverOptions
 
 properties = []
 
