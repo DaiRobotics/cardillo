@@ -8,8 +8,7 @@
 
 This repository is a **research-oriented fork** of the original
 [Cardillo](https://github.com/cardilloproject/cardillo) framework.
-Although this package is installed as `cardillo`, this repository is a
-research fork of the original Cardillo project and is not the official
+Although this package is installed as `cardillo`, this repository is not the official
 upstream distribution.
 
 It contains the source code used for the numerical experiments presented
