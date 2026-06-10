@@ -1,15 +1,23 @@
+from pathlib import Path
+
 from setuptools import setup, find_packages
 
 name = "cardillo"
 version = "1.0.0"
-author = "Jonas Breuling, Giuseppe Capobianco, Lisa Eberhardt, Simon Eugster"
+author = "Tianxiang Dai"
 author_email = (
-    "breuling@inm.uni-stuttgart.de, giuseppe.capobianco@fau.de, eberhardt@inm.uni-stuttgart.de, s.r.eugster@tue.nl",
+    "dai@inm.uni-stuttgart.de",
 )
-url = ""
-description = "Python package for flexible multibody dynamic problems."
-long_description = ""
-license = "LICENSE"
+url = "https://github.com/DaiRobotics/cardillo.git"
+description = (
+    "Research fork of Cardillo for reproducing the numerical experiments "
+    "reported in the accompanying manuscript."
+)
+
+long_description = Path("README.md").read_text(encoding="utf-8")
+long_description_content_type = "text/markdown"
+
+license = "BSD-3-Clause"
 
 setup(
     name=name,
