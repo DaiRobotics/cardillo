@@ -124,7 +124,7 @@ system.assemble()
 
 # ---- reference ----
 
-traj_mode = os.environ.get("TDCM_TRAJ", "circle_xz")  # "p2p", "circle_xz", "circle_yz", "star_yz"
+traj_mode = os.environ.get("TDCM_TRAJ", "p2p")  # "p2p", "circle_xz", "circle_yz", "star_yz"
 t_scale = float(os.environ.get("TDCM_TSCALE", 1.0)) # time scaling if needed
 
 def paper_to_cardillo(u):
@@ -283,6 +283,7 @@ class TendonController:
         self.tendons = tendons
         self.r_OP_ref_fn = r_OP_ref_fn
         self.Gamma0_inv = np.asarray(Gamma0_inv, dtype=float)
+        self.lambda_t_star = np.array(lambda_t0, dtype=float)
         self.lambda_t = np.array(lambda_t0, dtype=float)
         self.dt = float(dt)
         self.kp = float(kp)
@@ -309,21 +310,27 @@ class TendonController:
         r_OP = tip_position(q_full)
         r_OP_r = self.r_OP_ref_fn(t)
         e = r_OP - r_OP_r
-        v_P = u_full[rod.qDOF[rod.nodalDOF_r_u[rod.nnode - 1]]]  # tip velocity
+        v_P = u_full[rod.uDOF[rod.nodalDOF_r_u[rod.nnode - 1]]]  # tip velocity
 
         if not self.saturated:
             self.e_int += e * self.dt
 
-        # T_
+        lambda_t_cmd = self.lambda_t_star - self.Gamma0_inv @ (self.kp * e + self.ki * self.e_int + self.kd * v_P)
 
         # one forward-Euler step of  T_dot = -lambda * Gamma0_inv * e
         # (with Gamma0_inv = Gamma0^T per paper Remark 4).
         # Mirrors test_tdcm_li2023.py: compute delta, clip its magnitude per-step
         # to suppress overshoots from Gamma0^T's directional inaccuracies, then
         # apply with the [t_min, t_max] tendon bounds.
-        delta = -self.lambda_gain * self.dt * (self.Gamma0_inv @ e)
-        delta = np.clip(delta, -self.delta_bound, self.delta_bound)
-        self.lambda_t = np.clip(self.lambda_t + delta, self.lambda_t_min, self.lambda_t_max)
+        # delta = -self.lambda_gain * self.dt * (self.Gamma0_inv @ e)
+        # delta = np.clip(delta, -self.delta_bound, self.delta_bound)
+        # self.lambda_t = np.clip(self.lambda_t + delta, self.lambda_t_min, self.lambda_t_max)
+
+        delta = np.clip(lambda_t_cmd - self.lambda_t, -self.delta_bound, self.delta_bound)
+        lambda_t_new = self.lambda_t + delta
+        lambda_t_clipped = np.clip(lambda_t_new, self.lambda_t_min, self.lambda_t_max)
+        self.saturated = bool(np.any(lambda_t_clipped != lambda_t_new))
+        self.lambda_t = lambda_t_clipped
 
         err = float(np.linalg.norm(e))
         self.history["t"].append(float(t))
@@ -342,8 +349,12 @@ lambda_t_star, q_star, Gamma0 = solve_lambda_t_star(ref_target, lambda_t0=lambda
 
 q_star, _, la_c_star, __ = forward_statics(lambda_t_star, q_guess=q_star, ramp=False, n_load_steps=1) # for good first step guess
 
+kp = 300.0
+ki = lambda_gain
+kd = 30.0
+
 controller = TendonController(
-    tendons, r_OP_ref_fn=r_OP_ref_fn, Gamma0_inv=Gamma0.T, lambda_t0=lambda_t_star, dt=dt, verbose=True
+    tendons, r_OP_ref_fn=r_OP_ref_fn, Gamma0_inv=Gamma0.T, lambda_t0=lambda_t_star, dt=dt, kp=kp, ki=ki, kd=kd, verbose=True
 )
 
 system.t0 = 0.0
