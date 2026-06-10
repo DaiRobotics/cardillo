@@ -1,0 +1,34 @@
+{
+  "creators": [
+    {
+      "name": "Tianxiang Dai",
+      "affiliation": "University of Stuttgart, Institute for Nonlinear Mechanics, Stuttgart, Germany"
+    },
+    {
+      "name": "Marco Herrmann",
+      "affiliation": "Eindhoven University of Technology, Department of Mechanical Engineering, Eindhoven, The Netherlands"
+    },
+    {
+      "name": "Jonas Breuling",
+      "affiliation": "University of Stuttgart, Institute for Nonlinear Mechanics, Stuttgart, Germany"
+    },
+    {
+      "name": "Remco I. Leine",
+      "affiliation": "University of Stuttgart, Institute for Nonlinear Mechanics, Stuttgart, Germany"
+    },
+    {
+      "name": "Simon R. Eugster",
+      "affiliation": "Eindhoven University of Technology, Department of Mechanical Engineering, Eindhoven, The Netherlands"
+    }
+  ],
+  "contributors": [
+    {
+      "name": "Giuseppe Capobianco",
+      "type": "Researcher"
+    },
+    {
+      "name": "Lisa Eberhardt",
+      "type": "Researcher"
+    }
+  ]
+}
