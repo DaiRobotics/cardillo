@@ -8,7 +8,6 @@
 
 This repository is a **research-oriented fork** of the original
 [Cardillo](https://github.com/cardilloproject/cardillo) framework.
-
 Although this package is installed as `cardillo`, this repository is a
 research fork of the original Cardillo project and is not the official
 upstream distribution.
@@ -19,9 +18,6 @@ in the manuscript:
 > **"A Mixed Discrete Cosserat Rod Formulation"**  
 > *(currently under review)*
 
-Although this package is installed as `cardillo`, this repository is a
-research fork of the original Cardillo project and is not the official
-upstream distribution.
 To improve reproducibility and reduce repository size, many components of
 the original project (examples, visualization assets, and unrelated
 modules) have been removed, while new implementations required for the
