@@ -493,7 +493,6 @@ if __name__ == "__main__":
         name="maza_board",
     )
 
-
     # create rolling condition
     rolling_condition = RollingCondition(board, ball)
 

@@ -80,19 +80,14 @@ class Newton:
         self._W_g_coo = self.system.W_g(t, q, format="Coo", coo=self._W_g_coo)
         self._W_c_coo = self.system.W_c(t, q, format="Coo", coo=self._W_c_coo)
         self._W_N_coo = self.system.W_N(t, q, format="Coo", coo=self._W_N_coo)
-        self.W_g = self._W_g_coo.asformat("coo")
-        self.W_c = self._W_c_coo.asformat("coo")
-        self.W_N = self._W_N_coo.asformat("coo")
+        W_g = self._W_g_coo.asformat("csr")
+        W_c = self._W_c_coo.asformat("csr")
+        W_N = self._W_N_coo.asformat("csr")
         self.g_N = self.system.g_N(t, q)
 
         # static equilibrium
         F = np.zeros_like(x)
-        F[:r0] = (
-            self.system.h(t, q, self.u0)
-            + self.W_g @ la_g
-            + self.W_c @ la_c
-            + self.W_N @ la_N
-        )
+        F[:r0] = self.system.h(t, q, self.u0) + W_g @ la_g + W_c @ la_c + W_N @ la_N
         F[r0:r1] = self.system.g(t, q)
         F[r1:r2] = self.system.c(t, q, self.u0, la_c)
         F[r2:r3] = self.system.g_S(t, q)
@@ -137,7 +132,7 @@ class Newton:
                     Rla_N_la_N[i, i] = 1.0
                 else:
                     Rla_N_q[i] = g_N_q[i]
-            jac["W_N", :r0, c2:] = self.W_N
+            jac["W_N", :r0, c2:] = self._W_N_coo
             jac["Rla_N_q", r3:, :c0] = Rla_N_q
             jac["Rla_N_la_N", r3:, c2:] = Rla_N_q
         jac["h_q", :r0, :c0] = self._h_q_coo
@@ -150,14 +145,14 @@ class Newton:
         if self._Wla_N_q_coo.not_empty:
             jac["Wla_N_q", :r0, :c0] = self._Wla_N_q_coo
 
-        jac["W_g", :r0, c0:c1] = self.W_g
-        jac["W_c", :r0, c1:c2] = self.W_c
+        jac["W_g", :r0, c0:c1] = self._W_g_coo
+        jac["W_c", :r0, c1:c2] = self._W_c_coo
         jac["g_q", r0:r1, :c0] = self._g_q_coo
         jac["c_q", r1:r2, :c0] = self._c_q_coo
         jac["c_la_c", r1:r2, c1:c2] = c_la_c
-        jac["W_c", r1:r2, c1:c2] = self.W_c
         jac["g_S_q", r2:r3, :c0] = self._g_S_q_coo
-        return jac.asformat("coo").asformat("csc")
+
+        return jac.asformat("csc")
         # return bmat([[      K, self.W_g, self.W_c,   self.W_N],
         #              [    g_q,     None,     None,       None],
         #              [    c_q,     None,   c_la_c,       None],

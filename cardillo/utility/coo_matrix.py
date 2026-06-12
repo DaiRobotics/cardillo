@@ -51,7 +51,6 @@ class CooMatrix:
 
         self._data_index = {}
         self._value_type = {}
-        self._scipy_coo = None
 
     @property
     def not_empty(self):
@@ -205,20 +204,54 @@ class CooMatrix:
         """Convert container to scipy coo_array."""
         if copy:
             coo = self.tosparse(coo_array, copy=True)
-        elif self._scipy_coo is None:
-            coo = self.tosparse(coo_array, copy=False)
-            self._scipy_coo = coo
         else:
-            coo = self._scipy_coo
+            try:
+                coo = self._scipy_coo
+                coo.data = self.data
+            except AttributeError:
+                coo = self._scipy_coo = self.tosparse(coo_array, copy=False)
+                return coo
         return coo
 
     def tocsc(self, copy=False):
         """Convert container to scipy csc_array."""
-        return self.tosparse(csc_array, copy=copy)
+        if copy:
+            csc = self.tosparse(csc_array, copy=True)
+        else:
+            try:
+                csc = self._scipy_csc
+                try:
+                    inverse = self.csc_inverse
+                except AttributeError:
+                    nrow = self.shape[0]
+                    index = self.col * nrow + self.row
+                    _, inverse = np.unique(index, return_inverse=True)
+                    self.csc_inverse = inverse
+                csc.data = np.bincount(inverse, weights=self.data)
+            except AttributeError:
+                csc = self._scipy_csc = self.tosparse(csc_array, copy=False)
+                return csc
+        return csc
 
     def tocsr(self, copy=False):
         """Convert container to scipy csr_array."""
-        return self.tosparse(csr_array, copy=copy)
+        if copy:
+            csr = self.tosparse(csr_array, copy=True)
+        else:
+            try:
+                csr = self._scipy_csr
+                try:
+                    inverse = self.csr_inverse
+                except AttributeError:
+                    ncol = self.shape[1]
+                    index = self.row * ncol + self.col
+                    _, inverse = np.unique(index, return_inverse=True)
+                    self.csr_inverse = inverse
+                csr.data = np.bincount(inverse, weights=self.data)
+            except AttributeError:
+                csr = self._scipy_csr = self.tosparse(csr_array, copy=False)
+                return csr
+        return csr
 
     def toarray(self, copy=False):
         """Convert container to 2D numpy array."""
