@@ -188,7 +188,7 @@ class CooMatrix:
         except TypeError:
             return convert_method()
 
-    def tosparse(self, scipy_matrix, copy=False):
+    def __tosparse(self, scipy_matrix, copy=False):
         """Convert container to scipy sparse matrix.
 
         Parameters
@@ -202,55 +202,55 @@ class CooMatrix:
 
     def tocoo(self, copy=False):
         """Convert container to scipy coo_array."""
-        if copy:
-            coo = self.tosparse(coo_array, copy=True)
-        else:
-            try:
-                coo = self._scipy_coo
-                coo.data = self.data
-            except AttributeError:
-                coo = self._scipy_coo = self.tosparse(coo_array, copy=False)
-                return coo
-        return coo
+        return self.__tosparse(coo_array, copy=copy)
 
     def tocsc(self, copy=False):
         """Convert container to scipy csc_array."""
-        if copy:
-            csc = self.tosparse(csc_array, copy=True)
-        else:
-            try:
-                csc = self._scipy_csc
-                try:
-                    inverse = self.csc_inverse
-                except AttributeError:
-                    nrow = self.shape[0]
-                    index = self.col * nrow + self.row
-                    _, inverse = np.unique(index, return_inverse=True)
-                    self.csc_inverse = inverse
-                csc.data = np.bincount(inverse, weights=self.data)
-            except AttributeError:
-                csc = self._scipy_csc = self.tosparse(csc_array, copy=False)
-                return csc
-        return csc
+        return self.__tosparse(csc_array, copy=copy)
 
     def tocsr(self, copy=False):
         """Convert container to scipy csr_array."""
-        if copy:
-            csr = self.tosparse(csr_array, copy=True)
-        else:
+        return self.__tosparse(csr_array, copy=copy)
+
+    def tocoo_cached(self):
+        """Convert container to scipy coo_array."""
+        try:
+            coo = self._coo_cached
+            coo.data = self.data
+        except AttributeError:
+            coo = self._coo_cached = self.tocoo(copy=False)
+            return coo
+
+    def tocsc_cached(self):
+        """Convert container to scipy csc_array."""
+        try:
+            csc = self._csc_cached
             try:
-                csr = self._scipy_csr
-                try:
-                    inverse = self.csr_inverse
-                except AttributeError:
-                    ncol = self.shape[1]
-                    index = self.row * ncol + self.col
-                    _, inverse = np.unique(index, return_inverse=True)
-                    self.csr_inverse = inverse
-                csr.data = np.bincount(inverse, weights=self.data)
+                inverse = self.__csc_inverse
             except AttributeError:
-                csr = self._scipy_csr = self.tosparse(csr_array, copy=False)
-                return csr
+                nrow = self.shape[0]
+                index = self.col * nrow + self.row
+                _, inverse = np.unique(index, return_inverse=True)
+                self.__csc_inverse = inverse
+            csc.data = np.bincount(inverse, weights=self.data)
+        except AttributeError:
+            csc = self._csc_cached = self.tocsc(copy=False)
+        return csc
+
+    def tocsr_cached(self):
+        """Convert container to scipy csr_array."""
+        try:
+            csr = self._csr_cached
+            try:
+                inverse = self.__csr_inverse
+            except AttributeError:
+                ncol = self.shape[1]
+                index = self.row * ncol + self.col
+                _, inverse = np.unique(index, return_inverse=True)
+                self.__csr_inverse = inverse
+            csr.data = np.bincount(inverse, weights=self.data)
+        except AttributeError:
+            csr = self._csr_cached = self.tocsr(copy=False)
         return csr
 
     def toarray(self, copy=False):

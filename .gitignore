@@ -53,6 +53,7 @@ examples/results
 
 # virtual environment
 myvenv
+.venv
 
 # profiling results
 *.prof
