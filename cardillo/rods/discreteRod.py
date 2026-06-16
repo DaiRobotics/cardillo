@@ -1049,6 +1049,7 @@ class DiscreteRod:
         T_SO3_inv_quat_nodes = math_jax.T_SO3_inv_quat_batch(
             self._view_nodal_q(q)[:, 3:]
         ).__array__()
+        # TODO: speed up
         for n in range(self.nnode):
             nodalDOF_p = self.nodalDOF_p[n]
             nodalDOF_p_u = self.nodalDOF_p_u[n]
@@ -1078,19 +1079,18 @@ class DiscreteRod:
     #####################################################
     def g_S(self, t, q):
         p = self._view_nodal_q(q)[:, 3:]
-        return np.sum(p**2, axis=1) - 1
+        return np.einsum('ij,ij->i', p, p) - 1
 
     def g_S_q(self, t, q):
         p = self._view_nodal_q(q)[:, 3:]
-        self._g_S_q_coo.data = (2 * p).__array__().ravel()
+        self._g_S_q_coo.data = (2 * p).ravel()
         return self._g_S_q_coo
 
     ############
     # compliance
     ############
     def la_c(self, t, q, u):
-        la_c_el = self._la_c(q, u)
-        return la_c_el.__array__().ravel()
+        return self._la_c(q, u).__array__().ravel()
 
     def c(self, t, q, u, la_c):
         return self._c(q, u, la_c).__array__().ravel()
@@ -1118,19 +1118,13 @@ class DiscreteRod:
     ####################################################
     # interactions with other bodies and the environment
     ####################################################
-    def elDOF_P(self, xi):
+    def local_qDOF_P(self, xi):
         el = self._element_number(xi)
         return self.elDOF[el]
 
-    def elDOF_P_u(self, xi):
+    def local_uDOF_P(self, xi):
         el = self._element_number(xi)
         return self.elDOF_u[el]
-
-    def local_qDOF_P(self, xi):
-        return self.elDOF_P(xi)
-
-    def local_uDOF_P(self, xi):
-        return self.elDOF_P_u(xi)
 
     ##########################
     # r_OP / A_IB contribution
