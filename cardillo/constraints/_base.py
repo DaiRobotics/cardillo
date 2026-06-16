@@ -15,7 +15,7 @@ def concatenate_qDOF(object):
     qDOF2_part = qDOF2[local_qDOF2]
 
     object.qDOF = np.concatenate((qDOF1_part, qDOF2_part))
-    object._nq1 = len(local_qDOF1)
+    object._nq1 = len(qDOF1_part)
     object._nq2 = len(qDOF2_part)
     object._nq = object._nq1 + object._nq2
 
