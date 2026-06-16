@@ -158,7 +158,7 @@ class VisualDiscreteRod(_VisualTwinBase):
         self._ugrid.Modified()
 
         # set stress
-        _, B_gamma, B_kappa = rod._eval_els(q_rod)
+        _, B_gamma, B_kappa = rod._eval(q_rod)
         self._strain[:, :3] = B_gamma
         self._strain[:, 3:] = B_kappa
 
