@@ -19,7 +19,7 @@ from scipy.linalg import pinv
 from scipy.sparse.linalg import splu
 
 
-def solve_ref_config(r_OP_ref, lambda_t0, tol=5e-4, damping=1e-4, force_steps = 3):
+def solve_ref_config(r_OP_ref, lambda_t0, tol=5e-4, damping=1e-4, force_steps = 10):
     static_model = StaticModel()
     
     lambda_t = np.clip(np.array(lambda_t0, float), lambda_t_min, lambda_t_max)
@@ -81,6 +81,43 @@ def solve_ref_config(r_OP_ref, lambda_t0, tol=5e-4, damping=1e-4, force_steps = 
         k += 1
     return lambda_t, q_guess, Gamma
 
+def solve_config(static_model, lambda_t, force_steps=10, q_warm=None):
+
+    if q_warm is not None:
+        st_solver = static_model.solver
+        nq = st_solver.system.nq
+        x0 = st_solver.x0.copy() if st_solver.x0 is not None else np.zeros(st_solver.nx, float)
+        x0[:nq] = q_warm
+        st_solver.x0 = x0
+    # ======= solve static equilibrium =======
+    sol, x, solver = static_model.apply_forces(lambda_t, verbose=False, force_steps=force_steps)
+    
+    # value evaluation
+    rod = static_model.rod
+    system = static_model.system
+    rod = static_model.rod
+    tendons = static_model.tendons
+
+    q_guess = sol.q[-1]
+
+    x = x.flatten()
+    J = solver.jac(x, 1.0)
+
+    nu = system.nu
+    n_tendons = static_model.n_tendons
+    W_t = np.zeros((nu, n_tendons))
+    for j, td in enumerate(tendons):
+        # W_t[td.uDOF, j] = -td.W_l(1.0, q_eq[td.qDOF])
+        np.add.at(W_t[:, j], td.uDOF, -td.W_l(1.0, q_guess[td.qDOF]))
+    rhs = np.zeros((solver.nx, n_tendons))
+    rhs[:nu, :] = W_t
+
+    dx = splu(J).solve(-rhs)   # dx_dT, shape (nx, n_tendons)
+    pos_idx = rod.qDOF[rod.nodalDOF_r[rod.nnode - 1]]
+    Gamma = dx[pos_idx, :]
+
+    return q_guess, Gamma
+
 class TendonForceControl:
     def __init__(
         self,
@@ -89,6 +126,9 @@ class TendonForceControl:
         r_OP_traj,
         rod, 
         tendons:list[TendonForce],
+        static_model=None,
+        gamma_eps=1.0,
+        gamma_check_dt = 1.0,
         name="tendon_force_control",
     ) -> None:
         self.Kp = Kp
@@ -97,6 +137,11 @@ class TendonForceControl:
         self.rod = rod
         self.tendons = tendons
         self.name = name
+
+        self.static_model = static_model
+        self.gamma_eps = gamma_eps
+        self.gamma_check_dt = gamma_check_dt
+        self.last_gamma_check_t = -np.inf
 
         self.nq = len(tendons)
         self.q0 = np.zeros(self.nq)
@@ -108,15 +153,35 @@ class TendonForceControl:
         self.uDOF = self.rod.uDOF
 
     def step_callback(self, t, q, u):
+        # Gamma = self.Gamma(t)
         r_OP_ref = self.r_OP_traj(t)
+
+        if (self.static_model is not None
+                and t - self.last_gamma_check_t >= self.gamma_check_dt):
+            self.last_gamma_check_t = t
+            lambda_cur = np.clip(np.asarray(q[:self._nq1], dtype=float),
+                              lambda_t_min, lambda_t_max)
+            try:
+                q_rod_cur = np.asarray(q[self._nq1:], dtype=float)
+                _, Gamma_cur = solve_config(self.static_model, lambda_cur, q_warm=q_rod_cur)
+                dGamma = Gamma_cur - self.Gamma
+                if np.linalg.norm(dGamma @ np.linalg.pinv(self.Gamma), 2) >= self.gamma_eps:        # Gamma0 no longer valid -> refresh
+                    self.Gamma = Gamma_cur
+            except Exception:
+                pass
+
         r_OP = self.rod._view_nodal_q(q[self._nq1:])[-1, :3]
         delta_r_OP = r_OP_ref - r_OP
         self._la_t_dot = self.Kp * (self.Gamma.T @ delta_r_OP)
+        # self._la_t_dot = self.Kp * pinv(self.Gamma) @ delta_r_OP 
+        # self._la_t_dot = self.Kp * self.Gamma.T @ np.linalg.solve(self.Gamma @ self.Gamma.T, delta_r_OP)
         for td, la in zip(self.tendons, q[:self._nq1]):
             td.set_force(lambda t, la=la: la)
         return q, u
 
     def q_dot(self, t, q, u):
+        # for td, la in zip(self.tendons, q[:self._nq1]):
+        #     td.set_force(lambda t, la=la: la)
         return self._la_t_dot
 
 
@@ -328,7 +393,8 @@ class DynamicModel(CommonModel):
             lambda t, xi: self.rod_density * self.cross_section.area(xi) * g_acc * np.array([0, -1.0, 0], dtype=np.float64),
             self.rod,
         )
-        self.controller = TendonForceControl(Kp, Gamma, r_OP_traj, self.rod, self.tendons)
+        static_model = StaticModel()
+        self.controller = TendonForceControl(Kp, Gamma, r_OP_traj, self.rod, self.tendons, static_model=static_model, gamma_eps=1.0, gamma_check_dt = 1.0)
         for td, la in zip(self.tendons, la_t0):
             td.set_force(lambda t, la=la: la)
 
@@ -353,27 +419,13 @@ class DynamicModel(CommonModel):
 # sol = static_model.apply_forces([10, 0, 0, 0], eval_keys=["sol"], force_steps=10)
 
 # ----- controller parameters -----
-lambda_gain = 200.0*1.0 # control gain lambda for Gamma0^T. 
 lambda_t_min = 0.0
-lambda_t_max = 8.0
+lambda_t_max = 50.0
 la_t0 = np.array([1, 1, 1, 1]) * 0.5
-delta_bound = 0.05 # [N] per-step tension change limit. With lambda_gain=200 this is loose (typical per-step Delta < 0.05), so it acts as a safety cap only; the controller integrates freely most of the time.
-# t_end = 50.0 # [s] total horizon -> HOLD_T = 10 s
-
-kp = 300.0
-ki = lambda_gain
-kd = 30.0
-
-
-dt = 1e-2
-
-SHOW = True
-
-
 
 # ---- reference trajectories ----
 
-traj_mode = "circle_yz" # "p2p", "circle_xz", "circle_yz", "star_yz"
+traj_mode = "p2p" # "p2p", "circle_zy", "circle_xy", "star_yz"
 t_scale = 1.0 # time scaling if needed
 
 def paper_to_cardillo(u):
@@ -417,19 +469,19 @@ if traj_mode == "p2p":
         k = min(int(t / hold_t), len(sequence) - 1)
         return SETPOINT_TABLE[sequence[k]]
 
-elif traj_mode == "circle_xz":
-    x_c, z_c, rad = 11.0e-2, -1.75e-2, 3.0e-2
+elif traj_mode == "circle_zy":
+    x_c, z_c, rad = 10.3e-2, -1.75e-2, 3.0e-2
     t_period = 40.0 * t_scale  # [s] per lap (paper: 2 laps in ~80 s)
     t_end = 2 * t_period
     r_OP_ref_fn = make_circle(
-        lambda th: x_c + rad * np.cos(th),
+        lambda th: x_c + rad * np.sin(th + np.pi),  
         lambda th: 0.0,
-        lambda th: z_c + rad * np.sin(th),
+        lambda th: z_c + rad * np.cos(th),
         t_period,
     )
 
-elif traj_mode == "circle_yz":
-    x_const, y_c, z_c, rad = 13.5e-2, 0.0, -2.0e-2, 5.5e-2
+elif traj_mode == "circle_xy":
+    x_const, y_c, z_c, rad = 13.5e-2, 0.0, -3.5e-2, 5.5e-2
     t_period = 40.0 * t_scale
     t_end = 2 * t_period
     r_OP_ref_fn = make_circle(
@@ -447,16 +499,47 @@ elif traj_mode == "star_yz":
 else:
     raise ValueError(f"unknown tdcm_traj mode: {traj_mode!r}")
 
+# ----- reference Gamma -----
+
+
 # ---- build controller ----
+# if traj_mode == "p2p":
+#     gamma_table = {}
+#     la_table = {}
+#     q_table = {}
+#     lambda_t0 = la_t0
+#     for name in sequence:
+#         r_OP_ref = SETPOINT_TABLE[name]
+#         # r_OP_ref = r_OP_ref_fn(0.0)  
+#         la_t0, q0, Gamma0 = solve_ref_config(r_OP_ref, tol=1e-7, lambda_t0=lambda_t0, force_steps=3)
+#         gamma_table[name] = Gamma0
+#         la_table[name] = la_t0
+#         q_table[name] = q0
+#         lambda_t0 = la_t0
+
+#     def gamma_fn(t):
+#         k = min(int(t / hold_t), len(sequence) - 1)
+#         return gamma_table[sequence[k]]
+    
+#     Gamma = gamma_fn
+#     la_t0 = la_table[sequence[0]]
+#     q0 = q_table[sequence[0]]
+
+# else:
+#     setpoint = "E"
+#     r_OP_ref = SETPOINT_TABLE[setpoint]
+#     la_t0, q0, Gamma0 = solve_ref_config(r_OP_ref, tol=1e-7, lambda_t0=la_t0, force_steps=3)
+
 setpoint = "E"
 r_OP_ref = SETPOINT_TABLE[setpoint]
+# # r_OP_ref = r_OP_ref_fn(0.0)  
 
-la_t0, q0, Gamma0 = solve_ref_config(r_OP_ref, tol=5e-3, lambda_t0=la_t0, force_steps=3)
+la_t0, q0, Gamma0 = solve_ref_config(r_OP_ref, tol=1e-7, lambda_t0=la_t0, force_steps=10)
 
 # static_model.apply_forces(la_t0)
 # la_t0, q0, Gamma0 = np.zeros(4), None, np.ones((3,4))
 
-Kp = 100
+Kp = 200
 t_sim = t_end
 dynamic_model = DynamicModel(t_sim, Kp, Gamma0, la_t0, r_OP_ref_fn, q0)
 
@@ -498,82 +581,106 @@ cam.Zoom(1)
 sol = dynamic_model.solver.solve()
 plotter.render_solution(sol, True, play_speed_up=1)
 
-exit()
-
-# TODO
-
-
-# la_t(t) ---> la_t(t, q)
-
-
-
-
-controller = TendonController(
-    tendons, r_OP_ref_fn=r_OP_ref_fn, Gamma0_inv=Gamma0.T, lambda_t0=la_t0, dt=dt, kp=kp, ki=ki, kd=kd, verbose=True
-)
-
-
-_orig_step_callback = system.step_callback # connect controller to each dynamic step
-
-def _controlled_step_callback(t, q, u):
-    q, u = _orig_step_callback(t, q, u)  # keeps rod quaternion normalisation
-    controller.update(t, q, u)           # updates tensions for the next step
-    return q, u
-
-system.step_callback = _controlled_step_callback
-
-
-# ---- plots ----
-if controller.history["error"]:
-    print(f"final |e| = {controller.history['error'][-1]*1e3:.3f} mm "
-          f"(tip {tip_position(sol.q[-1])*1e2} cm, target {r_OP_ref_fn(sol.t[-1])*1e2} cm)")
-
-if not SHOW:
-    raise SystemExit(0)
-
 from matplotlib import pyplot as plt
 
-hist = controller.history
-t = np.asarray(hist["t"])
-r_OP = np.asarray(hist["r_OP"]) * 1e2     # cm
-r_OP_ref = np.asarray(hist["r_OP_ref"]) * 1e2
-abs_err = np.abs(r_OP - r_OP_ref)
+t = sol.t
+q = sol.q[:, rod.qDOF].reshape((-1, rod.nnode, 7))
+r_OP_traj = np.array([r_OP_ref_fn(ti) for ti in t])
 
-fig, ax = plt.subplots(3, 1, figsize=(6, 8), sharex=True)
-for i, label in enumerate(["x", "y", "z"]):
-    ax[i].plot(t, r_OP[:, i], label="actual")
-    ax[i].plot(t, r_OP_ref[:, i], "--", label="desired")
-    ax[i].set_ylabel(f"{label} [cm]")
-    ax[i].grid(True)
-    ax[i].legend()
-ax[2].set_xlabel("time [s]")
-fig.suptitle("Static-model controller, dynamic plant (BackwardEuler)")
-plt.tight_layout()
+# ---- X-Y plane plots ----
+# fig = plt.figure(figsize=(10, 4))
+# gs  = fig.add_gridspec(2, 2, width_ratios=[1.2, 1])
 
-if traj_mode != "p2p":
-    # plane plots
-    h_idx, h_lab = (0, "X") if traj_mode == "circle_xz" else (1, "Y")
-    fig2, ax2 = plt.subplots(figsize=(5, 5))
-    ax2.plot(r_OP[:, h_idx], r_OP[:, 2], "r", label="actual")
-    ax2.plot(r_OP_ref[:, h_idx], r_OP_ref[:, 2], "b--", label="desired")
-    ax2.set_xlabel(f"{h_lab} [cm]")
-    ax2.set_ylabel("Z [cm]")
-    ax2.set_aspect("equal")
-    ax2.grid(True)
-    ax2.legend()
-    fig2.suptitle(f"Trajectory tracking ({traj_mode})")
-    plt.tight_layout()
+# axy = fig.add_subplot(gs[:, 0])
+# axy.plot(r_OP_traj[:, 0], r_OP_traj[:, 1], "b--", label="desired")
+# axy.plot(q[:, -1, 0], q[:, -1, 1], "r", label="actual")
+# axy.set_xlabel("X [m]")
+# axy.set_ylabel("Y [m]")
+# axy.legend()
+# axy.grid(True)
 
-    # absolute error per axis
-    fig3, ax3 = plt.subplots(3, 1, figsize=(6, 7), sharex=True)
-    for i, label in enumerate(["X", "Y", "Z"]):
-        ax3[i].plot(t, abs_err[:, i])
-        ax3[i].set_ylabel(f"|{label} err| [cm]")
-        ax3[i].grid(True)
-    ax3[2].set_xlabel("time [s]")
-    fig3.suptitle("Absolute tracking error (paper axes)")
-    plt.tight_layout()
+# atx = fig.add_subplot(gs[0, 1])
+# atx.plot(t, r_OP_traj[:, 0], "b--", label="desired")
+# atx.plot(t, q[:, -1, 0], "r", label="actual")
+# atx.set_xlabel("time [s]")
+# atx.set_ylabel("X [m]")
+# atx.legend()
+# atx.grid(True)
+
+# aty = fig.add_subplot(gs[1, 1])
+# aty.plot(t, r_OP_traj[:, 1], "b--", label="desired")
+# aty.plot(t, q[:, -1, 1], "r", label="actual")
+# aty.set_xlabel("time [s]")
+# aty.set_ylabel("Y [m]")
+# aty.legend()
+# aty.grid(True)
+
+# fig.suptitle(f"Trajectory tracking in X-Y plane")
+# fig.tight_layout()
+
+# ---- Z-Y plane plots ----
+# fig = plt.figure(figsize=(10, 4))
+# gs  = fig.add_gridspec(2, 2, width_ratios=[1.2, 1])
+
+# azy = fig.add_subplot(gs[:, 0])
+# azy.plot(r_OP_traj[:, 2], r_OP_traj[:, 1], "b--", label="desired")
+# azy.plot(q[:, -1, 2], q[:, -1, 1], "r", label="actual")
+# azy.set_xlabel("Z [m]")
+# azy.set_ylabel("Y [m]")
+# azy.legend()
+# azy.grid(True)
+
+# atz = fig.add_subplot(gs[0, 1])
+# atz = fig.add_subplot(gs[1, 1])
+# atz.plot(t, r_OP_traj[:, 2], "b--", label="desired")
+# atz.plot(t, q[:, -1, 2], "r", label="actual")
+# atz.set_xlabel("time [s]")
+# atz.set_ylabel("X [m]")
+# atz.legend()
+# atz.grid(True)
+
+# aty = fig.add_subplot(gs[1, 1])
+# aty.plot(t, r_OP_traj[:, 1], "b--", label="desired")
+# aty.plot(t, q[:, -1, 1], "r", label="actual")
+# aty.set_xlabel("time [s]")
+# aty.set_ylabel("Y [m]")
+# aty.legend()
+# aty.grid(True)
+
+# fig.suptitle(f"Trajectory tracking in Z-Y plane")
+# fig.tight_layout()
+
+# ---- Point to Point plots ----
+fig = plt.figure(figsize=(8, 6))
+gs = fig.add_gridspec(3, 1)
+
+atx = fig.add_subplot(gs[0, 0])
+atx.plot(t, q[:, -1, 0], "r", label="actual")
+atx.plot(t, r_OP_traj[:, 0], "b--", label="desired")
+atx.set_xlabel("time [s]")
+atx.set_ylabel("X [m]")
+atx.legend()
+atx.grid(True)
+
+aty = fig.add_subplot(gs[1, 0])
+aty.plot(t, q[:, -1, 1], "r", label="actual")
+aty.plot(t, r_OP_traj[:, 1], "b--", label="desired")
+aty.set_xlabel("time [s]")
+aty.set_ylabel("Y [m]")
+aty.legend()
+aty.grid(True)
+
+atz = fig.add_subplot(gs[2, 0])
+atz.plot(t, q[:, -1, 2], "r", label="actual")
+atz.plot(t, r_OP_traj[:, 2], "b--", label="desired")
+atz.set_xlabel("time [s]")
+atz.set_ylabel("Z [m]")
+atz.legend()
+atz.grid(True)
+
+fig.suptitle(f"Trajectory tracking (point-to-point)")
+fig.tight_layout()
+
+
 
 plt.show()
-
-
