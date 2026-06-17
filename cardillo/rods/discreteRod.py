@@ -68,14 +68,14 @@ class ElementKinematics:
     def __r_OP(alpha, q, B_r_CP):
         A_IB = ElementKinematics.__A_IB(alpha, q)
         r_OC0, r_OC1 = q[:3], q[7:10]
-        r_OP = r_OC0 + alpha * (r_OC1 - r_OC0)
-        return r_OP + A_IB @ B_r_CP
+        r_OC = r_OC0 + alpha * (r_OC1 - r_OC0)
+        return r_OC + A_IB @ B_r_CP
 
     @staticmethod
     @jit
     def __r_OP_q(alpha, q, B_r_CP):
         A_IB_q = ElementKinematics.__A_IB_q(alpha, q)
-        r_OP_q = jnp.concatenate(
+        r_OC_q = jnp.concatenate(
             [
                 (1.0 - alpha) * E3,  # cols 0:3
                 Z34,  # cols 3:7
@@ -84,7 +84,7 @@ class ElementKinematics:
             ],
             axis=1,
         )
-        return r_OP_q + B_r_CP @ A_IB_q
+        return r_OC_q + B_r_CP @ A_IB_q
 
     @staticmethod
     @jit
@@ -101,9 +101,7 @@ class ElementKinematics:
     def __v_P_q(alpha, q, u, B_r_CP):
         A_IB_q = ElementKinematics.__A_IB_q(alpha, q)
         B_Omega = ElementKinematics.__B_Omega(alpha, u)
-        cross = math_jax.cross3(B_Omega, B_r_CP)
-        v_P_q = cross @ A_IB_q
-        return v_P_q
+        return math_jax.cross3(B_Omega, B_r_CP) @ A_IB_q
 
     @staticmethod
     @jit
@@ -233,31 +231,31 @@ class ElementKinematics:
     ##########################
 
     def r_OP(self, q, B_r_CP=np.zeros(3, dtype=float)):
-        return self._r_OP(q, B_r_CP).__array__()
+        return self._r_OP(q, B_r_CP)
 
     def r_OP_q(self, q, B_r_CP=np.zeros(3, dtype=float)):
-        return self._r_OP_q(q, B_r_CP).__array__()
+        return self._r_OP_q(q, B_r_CP)
 
     def v_P(self, q, u, B_r_CP=np.zeros(3, dtype=float)):
-        return self._v_P(q, u, B_r_CP).__array__()
+        return self._v_P(q, u, B_r_CP)
 
     def v_P_q(self, q, u, B_r_CP=np.zeros(3, dtype=float)):
-        return self._v_P_q(q, u, B_r_CP).__array__()
+        return self._v_P_q(q, u, B_r_CP)
 
     def J_P(self, q, B_r_CP=np.zeros(3, dtype=float)):
-        return self._J_P(q, B_r_CP).__array__()
+        return self._J_P(q, B_r_CP)
 
     def J_P_q(self, q, B_r_CP=np.zeros(3, dtype=float)):
-        return self._J_P_q(q, B_r_CP).__array__()
+        return self._J_P_q(q, B_r_CP)
 
     def a_P(self, q, u, u_dot, B_r_CP=np.zeros(3, dtype=float)):
-        return self._a_P(q, u, u_dot, B_r_CP).__array__()
+        return self._a_P(q, u, u_dot, B_r_CP)
 
     def A_IB(self, q):
         key = q.tobytes()
         A_IB = self._A_IB_cache[key]
         if A_IB is None:
-            A_IB = self._A_IB(q).__array__()
+            A_IB = self._A_IB(q)
             self._A_IB_cache[key] = A_IB
         return A_IB
 
@@ -265,12 +263,12 @@ class ElementKinematics:
         key = q.tobytes()
         A_IB_q = self._A_IB_q_cache[key]
         if A_IB_q is None:
-            A_IB_q = self._A_IB_q(q).__array__()
+            A_IB_q = self._A_IB_q(q)
             self._A_IB_q_cache[key] = A_IB_q
         return A_IB_q
 
     def B_Omega(self, u):
-        return self._B_Omega(u).__array__()
+        return self._B_Omega(u)
 
     def B_Omega_q(self):
         return self._B_Omega_q
@@ -282,7 +280,7 @@ class ElementKinematics:
         return self._B_J_R_q
 
     def B_Psi(self, u_dot):
-        return self._B_Psi(u_dot).__array__()
+        return self._B_Psi(u_dot)
 
     def B_Psi_q(self):
         return self._B_Psi_q
@@ -923,17 +921,11 @@ class DiscreteRod:
 
     def __el_kinematics(self, xi):
         try:
-            el = self._kinematics_els[xi]
+            el_kin = self._kinematics_els[xi]
         except KeyError:
-            el = ElementKinematics(self._alpha(xi))
-            self._kinematics_els[xi] = el
-        if hasattr(self, "qDOF") and not hasattr(el, "qDOF"):
-            num = self._element_number(xi)
-            el.t0 = self.t0
-            el.q0 = self.q0[self.elDOF[num]]
-            el.qDOF = self.qDOF[self.elDOF[num]]
-            el.uDOF = self.uDOF[self.elDOF_u[num]]
-        return el
+            el_kin = ElementKinematics(self._alpha(xi))
+            self._kinematics_els[xi] = el_kin
+        return el_kin
 
     @staticmethod
     def straight_configuration(
@@ -1026,15 +1018,6 @@ class DiscreteRod:
 
         return np.concatenate([r0, p0], axis=1).flatten()
 
-    def assembler_callback(self):
-        for xi, mk in self._kinematics_els.items():
-            num = self._element_number(xi)
-            mk.t0 = self.t0
-            mk.q0 = self.q0[self.elDOF[num]]
-            mk.u0 = self.u0[self.elDOF_u[num]]
-            mk.qDOF = self.qDOF[self.elDOF[num]]
-            mk.uDOF = self.uDOF[self.elDOF_u[num]]
-
     #####################
     # kinematic equations
     #####################
@@ -1057,7 +1040,7 @@ class DiscreteRod:
         return self._q_dot_u_coo
 
     def step_callback(self, t, q, u):
-        p = self._view_nodal_q(q)[:, 3:]
+        p = q.reshape((self.nnode, 7))[:, 3:]
         p /= np.linalg.norm(p, axis=1, keepdims=True)
         return q, u
 
@@ -1079,7 +1062,7 @@ class DiscreteRod:
     #####################################################
     def g_S(self, t, q):
         p = self._view_nodal_q(q)[:, 3:]
-        return np.einsum('ij,ij->i', p, p) - 1
+        return np.einsum("ij,ij->i", p, p) - 1
 
     def g_S_q(self, t, q):
         p = self._view_nodal_q(q)[:, 3:]
@@ -1130,34 +1113,34 @@ class DiscreteRod:
     # r_OP / A_IB contribution
     ##########################
     def r_OP(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).r_OP(qe, B_r_CP)
+        return self.__el_kinematics(xi).r_OP(qe, B_r_CP).__array__()
 
     def r_OP_q(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).r_OP_q(qe, B_r_CP)
+        return self.__el_kinematics(xi).r_OP_q(qe, B_r_CP).__array__()
 
     def v_P(self, t, qe, ue, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).v_P(qe, ue, B_r_CP)
+        return self.__el_kinematics(xi).v_P(qe, ue, B_r_CP).__array__()
 
     def v_P_q(self, t, qe, ue, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).v_P_q(qe, ue, B_r_CP)
+        return self.__el_kinematics(xi).v_P_q(qe, ue, B_r_CP).__array__()
 
     def J_P(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).J_P(qe, B_r_CP)
+        return self.__el_kinematics(xi).J_P(qe, B_r_CP).__array__()
 
     def J_P_q(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).J_P_q(qe, B_r_CP)
+        return self.__el_kinematics(xi).J_P_q(qe, B_r_CP).__array__()
 
     def a_P(self, t, qe, ue, ue_dot, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).a_P(qe, ue, ue_dot, B_r_CP)
+        return self.__el_kinematics(xi).a_P(qe, ue, ue_dot, B_r_CP).__array__()
 
     def A_IB(self, t, qe, xi):
-        return self.__el_kinematics(xi).A_IB(qe)
+        return self.__el_kinematics(xi).A_IB(qe).__array__()
 
     def A_IB_q(self, t, qe, xi):
-        return self.__el_kinematics(xi).A_IB_q(qe)
+        return self.__el_kinematics(xi).A_IB_q(qe).__array__()
 
     def B_Omega(self, t, qe, ue, xi):
-        return self.__el_kinematics(xi).B_Omega(ue)
+        return self.__el_kinematics(xi).B_Omega(ue).__array__()
 
     def B_Omega_q(self, t, qe, ue, xi):
         return self.__el_kinematics(xi).B_Omega_q()
@@ -1169,7 +1152,7 @@ class DiscreteRod:
         return self.__el_kinematics(xi).B_J_R_q()
 
     def B_Psi(self, t, qe, ue, ue_dot, xi):
-        return self.__el_kinematics(xi).B_Psi(ue_dot)
+        return self.__el_kinematics(xi).B_Psi(ue_dot).__array__()
 
     def B_Psi_q(self, t, qe, ue, ue_dot, xi):
         return self.__el_kinematics(xi).B_Psi_q()
