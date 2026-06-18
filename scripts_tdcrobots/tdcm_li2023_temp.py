@@ -29,7 +29,9 @@ def solve_ref_config(r_OP_ref, lambda_t0, tol=5e-4, damping=1e-4, force_steps = 
     # iteratively solve the reference configuration based on optimization
     while True:
         # ======= solve static equilibrium =======
-        sol, x, solver = static_model.apply_forces(lambda_t, verbose=False, force_steps=force_steps)
+        print("====force")
+        # lambda_t = np.asarray([2.739, 2.524, 0.173, 1.647]) * 1
+        sol, x, solver = static_model.apply_forces(lambda_t, verbose=True, force_steps=force_steps, warm_start=False)
         
         # value evaluation
         rod = static_model.rod
@@ -62,22 +64,27 @@ def solve_ref_config(r_OP_ref, lambda_t0, tol=5e-4, damping=1e-4, force_steps = 
         e = r_OP_ref - r_OP
         e_n = np.linalg.norm(e)
 
-        print(f"  inv-statics it {k:2d}: |tip-target|={e_n*1e3:7.3f} mm, "
-              f"lambda_t={np.round(lambda_t, 3)}, cond(Gamma)={np.linalg.cond(Gamma):.2e}")
+        # print(f"  inv-statics it {k:2d}: |tip-target|={e_n*1e3:7.3f} mm, "
+        #       f"lambda_t={np.round(lambda_t, 3)}, cond(Gamma)={np.linalg.cond(Gamma):.2e}")
         if e_n < tol:
             break
-        if e_n_prev - e_n < 1e-7:  # converged to the best reachable point
-            stall += 1
-            if stall >= 5:
-                break
-        else:
-            stall = 0
+        # if e_n_prev - e_n < 1e-7:  # converged to the best reachable point
+            
+        # # if e_n_prev - e_n < 1e-4:  # converged to the best reachable point
+
+        #     stall += 1
+        #     if stall >= 5:
+        #         break
+        # else:
+        #     stall = 0
         e_n_prev = e_n
         # damped (Levenberg-style) least-squares step, with a per-step limiter
         # TODO: check the implementation of Tianxiang Multibody Paper
         dlambda_t = Gamma.T @ np.linalg.solve(Gamma @ Gamma.T + damping * np.eye(3), e)
         dlambda_t = np.clip(dlambda_t, -0.5, 0.5)  # small steps: stay in the uncrushed workspace
         lambda_t = np.clip(lambda_t + dlambda_t, lambda_t_min, lambda_t_max)
+        print(f"  inv-statics it {k:2d}: |tip-target|={e_n*1e3:7.3f} mm, "
+        f"lambda_t={np.round(lambda_t, 3)}, cond(Gamma)={np.linalg.cond(Gamma):.2e}")
         k += 1
     return lambda_t, q_guess, Gamma
 
@@ -124,6 +131,7 @@ class TendonForceControl:
         Kp,
         Gamma,
         r_OP_traj,
+        la_ref,
         rod, 
         tendons:list[TendonForce],
         static_model=None,
@@ -133,8 +141,9 @@ class TendonForceControl:
     ) -> None:
         self.Kp = Kp
         self.Gamma = Gamma
-        self.Gamma_inv = pinv(Gamma)
+        self.Gamma_inv = Gamma.T @ np.linalg.solve(Gamma @ Gamma.T, np.eye(Gamma.shape[0]))
         self.r_OP_traj = r_OP_traj
+        self.la_ref = la_ref
         self.rod = rod
         self.tendons = tendons
         self.name = name
@@ -155,6 +164,7 @@ class TendonForceControl:
 
     def step_callback(self, t, q, u):
         # Gamma = self.Gamma(t)
+        la_ref = self.la_ref(t)
         r_OP_ref = self.r_OP_traj(t)
 
         if (self.static_model is not None
@@ -177,7 +187,8 @@ class TendonForceControl:
         # self._la_t_dot = self.Kp * pinv(self.Gamma) @ delta_r_OP 
         # self._la_t_dot = self.Kp * self.Gamma.T @ np.linalg.solve(self.Gamma @ self.Gamma.T, delta_r_OP)
         for td, delta_la in zip(self.tendons, q[:self._nq1]):
-            td.set_force(lambda t, la=delta_la + la_ref: la)
+            # td.set_force(lambda t, la=delta_la + la_ref: la)
+            td.set_force(lambda t, la=delta_la: la)
         return q, u
 
     def q_dot(self, t, q, u):
@@ -386,7 +397,7 @@ class StaticModel(CommonModel):
 
 
 class DynamicModel(CommonModel):
-    def __init__(self, t_sim, Kp, Gamma, la_t0, r_OP_traj, q0=None):
+    def __init__(self, t_sim, Kp, Gamma, la_t0, r_OP_traj, la_ref, q0=None):
         super().__init__()
         g_acc = 9.81
         # ---- external forces ----
@@ -395,7 +406,7 @@ class DynamicModel(CommonModel):
             self.rod,
         )
         static_model = StaticModel()
-        self.controller = TendonForceControl(Kp, Gamma, r_OP_traj, self.rod, self.tendons, static_model=None, gamma_eps=1.0, gamma_check_dt = 1.0)
+        self.controller = TendonForceControl(Kp, Gamma, r_OP_traj, la_ref, self.rod, self.tendons, static_model=None, gamma_eps=1.0, gamma_check_dt = 1.0)
         for td, la in zip(self.tendons, la_t0):
             td.set_force(lambda t, la=la: la)
 
@@ -422,7 +433,7 @@ class DynamicModel(CommonModel):
 # ----- controller parameters -----
 lambda_t_min = 0.0
 lambda_t_max = 50.0
-la_t0 = np.array([1, 1, 1, 1]) * 0.5
+la_t0 = np.array([1, 1, 1, 1]) * 0.0
 
 # ---- reference trajectories ----
 
@@ -469,7 +480,23 @@ if traj_mode == "p2p":
 
     def r_OP_ref_fn(t):
         k = min(int(t / hold_t), len(sequence) - 1)
-        return SETPOINT_TABLE["E2"]
+        # return SETPOINT_TABLE["E2"]
+        return SETPOINT_TABLE[sequence[k]]
+    
+    la_ref_table = []
+    
+    i = 0
+    for name in ['C']:
+        r_OP_ref = SETPOINT_TABLE[name]
+        la_ref, _, _ = solve_ref_config(r_OP_ref, la_t0, force_steps=20)
+        la_ref_table[i] = la_ref
+        i += 1
+    def la_ref_fn(t):
+        k = min(int(t / hold_t), len(sequence) - 1)
+        return la_ref_table[sequence[k]]
+
+        
+
 
 elif traj_mode == "circle_zy":
     x_c, z_c, rad = 10.3e-2, -1.75e-2, 3.0e-2
