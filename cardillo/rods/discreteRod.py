@@ -919,7 +919,7 @@ class DiscreteRod:
         q_body = q[self.qDOF]
         return np.array([q_body[nodalDOF] for nodalDOF in self.nodalDOF_r]).T
 
-    def __el_kinematics(self, xi):
+    def _el_kinematics(self, xi):
         try:
             el_kin = self._kinematics_els[xi]
         except KeyError:
@@ -1113,52 +1113,52 @@ class DiscreteRod:
     # r_OP / A_IB contribution
     ##########################
     def r_OP(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).r_OP(qe, B_r_CP).__array__()
+        return self._el_kinematics(xi).r_OP(qe, B_r_CP).__array__()
 
     def r_OP_q(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).r_OP_q(qe, B_r_CP).__array__()
+        return self._el_kinematics(xi).r_OP_q(qe, B_r_CP).__array__()
 
     def v_P(self, t, qe, ue, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).v_P(qe, ue, B_r_CP).__array__()
+        return self._el_kinematics(xi).v_P(qe, ue, B_r_CP).__array__()
 
     def v_P_q(self, t, qe, ue, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).v_P_q(qe, ue, B_r_CP).__array__()
+        return self._el_kinematics(xi).v_P_q(qe, ue, B_r_CP).__array__()
 
     def J_P(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).J_P(qe, B_r_CP).__array__()
+        return self._el_kinematics(xi).J_P(qe, B_r_CP).__array__()
 
     def J_P_q(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).J_P_q(qe, B_r_CP).__array__()
+        return self._el_kinematics(xi).J_P_q(qe, B_r_CP).__array__()
 
     def a_P(self, t, qe, ue, ue_dot, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self.__el_kinematics(xi).a_P(qe, ue, ue_dot, B_r_CP).__array__()
+        return self._el_kinematics(xi).a_P(qe, ue, ue_dot, B_r_CP).__array__()
 
     def A_IB(self, t, qe, xi):
-        return self.__el_kinematics(xi).A_IB(qe).__array__()
+        return self._el_kinematics(xi).A_IB(qe).__array__()
 
     def A_IB_q(self, t, qe, xi):
-        return self.__el_kinematics(xi).A_IB_q(qe).__array__()
+        return self._el_kinematics(xi).A_IB_q(qe).__array__()
 
     def B_Omega(self, t, qe, ue, xi):
-        return self.__el_kinematics(xi).B_Omega(ue).__array__()
+        return self._el_kinematics(xi).B_Omega(ue).__array__()
 
     def B_Omega_q(self, t, qe, ue, xi):
-        return self.__el_kinematics(xi).B_Omega_q()
+        return self._el_kinematics(xi).B_Omega_q()
 
     def B_J_R(self, t, qe, xi):
-        return self.__el_kinematics(xi).B_J_R()
+        return self._el_kinematics(xi).B_J_R()
 
     def B_J_R_q(self, t, qe, xi):
-        return self.__el_kinematics(xi).B_J_R_q()
+        return self._el_kinematics(xi).B_J_R_q()
 
     def B_Psi(self, t, qe, ue, ue_dot, xi):
-        return self.__el_kinematics(xi).B_Psi(ue_dot).__array__()
+        return self._el_kinematics(xi).B_Psi(ue_dot).__array__()
 
     def B_Psi_q(self, t, qe, ue, ue_dot, xi):
-        return self.__el_kinematics(xi).B_Psi_q()
+        return self._el_kinematics(xi).B_Psi_q()
 
     def B_Psi_u(self, t, qe, ue, ue_dot, xi):
-        return self.__el_kinematics(xi).B_Psi_u()
+        return self._el_kinematics(xi).B_Psi_u()
 
     def export(self, sol_i, **kwargs):
         if not hasattr(self, "_visual_twin"):

@@ -404,7 +404,7 @@ class VisualTendon(_VisualTwinBase):
         poly_data = vtk.vtkPolyData()
         # points
         npts = 2
-        ncon = len(self.contr.connectivity)
+        ncon = self.contr.n_nodes
         self.vtkpoints = vtk.vtkPoints()
         self.vtkpoints.SetNumberOfPoints(npts * ncon)
         poly_data.SetPoints(self.vtkpoints)
@@ -439,9 +439,10 @@ class VisualTendon(_VisualTwinBase):
     def update_visual_state(self, sol_i):
         t, q = sol_i.t, sol_i.q[self.contr.qDOF]
         points = []
-        for j, k in self.contr.connectivity:
-            points.append(self.contr.r_OPk(t, q, j))
-            points.append(self.contr.r_OPk(t, q, k))
+        r_OPk = [self.contr.r_OPk(t, q, k) for k in range(self.contr.n_nodes)]
+        for k in range(self.contr.n_nodes - 1):
+            points.append(r_OPk[k])
+            points.append(r_OPk[k + 1])
         for i, p in enumerate(points):
             self.vtkpoints.SetPoint(i, p)
         self.vtkpoints.Modified()

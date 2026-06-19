@@ -80,9 +80,9 @@ class Newton:
         self._W_g_coo = self.system.W_g(t, q, format="Coo", coo=self._W_g_coo)
         self._W_c_coo = self.system.W_c(t, q, format="Coo", coo=self._W_c_coo)
         self._W_N_coo = self.system.W_N(t, q, format="Coo", coo=self._W_N_coo)
-        W_g = self._W_g_coo.tocsr_cached()
-        W_c = self._W_c_coo.tocsr_cached()
-        W_N = self._W_N_coo.tocsr_cached()
+        W_g = self._W_g_coo.tocsr(cached=True)
+        W_c = self._W_c_coo.tocsr(cached=True)
+        W_N = self._W_N_coo.tocsr(cached=True)
         self.g_N = self.system.g_N(t, q)
 
         # static equilibrium
@@ -123,7 +123,7 @@ class Newton:
         # note: csr_matrix is best for row slicing, see
         # https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_array.html#scipy.sparse.csr_array
         if self._g_N_q_coo.not_empty:
-            g_N_q = self._g_N_q_coo.tocsr_cached()
+            g_N_q = self._g_N_q_coo.tocsr(cached=True)
 
             Rla_N_q = lil_array((self.nla_N, self.nq), dtype=float)
             Rla_N_la_N = lil_array((self.nla_N, self.nla_N), dtype=float)
@@ -152,7 +152,7 @@ class Newton:
         jac["c_la_c", r1:r2, c1:c2] = c_la_c
         jac["g_S_q", r2:r3, :c0] = self._g_S_q_coo
 
-        return jac.tocsc_cached()
+        return jac.tocsc(cached=True)
         # return bmat([[      K, self.W_g, self.W_c,   self.W_N],
         #              [    g_q,     None,     None,       None],
         #              [    c_q,     None,   c_la_c,       None],

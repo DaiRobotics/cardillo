@@ -143,28 +143,28 @@ class ScipyDAE:
         if self.nla_g:
             g_q = self.g_q1 = self.system.g_q(t, q, format="Coo", coo=self.g_q1)
             g_q_T = self.g_q1_T = g_q.transpose(copy=False, coo=self.g_q1_T)
-            F0 -= g_q_T.tocsr_cached() @ mu_g
+            F0 -= g_q_T.tocsr(cached=True) @ mu_g
         F[: self.split[0]] = F0
         ####################
         # equations of motion
         ####################
         sys = self.system
         M = self.M2 = self.system.M(t, q, format="Coo", coo=self.M2)
-        F1 = M.tocsr_cached() @ u_dot - self.system.h(t, q, u)
+        F1 = M.tocsr(cached=True) @ u_dot - self.system.h(t, q, u)
         if sys.nla_tau:
             W_tau = self._W_tau = self.system.W_tau(t, q, format="Coo", coo=self._W_tau)
-            F1 -= W_tau.tocsr_cached() @ self.system.la_tau(t, q, u)
+            F1 -= W_tau.tocsr(cached=True) @ self.system.la_tau(t, q, u)
         if sys.nla_g:
             W_g = self.W_g1 = self.system.W_g(t, q, format="Coo", coo=self.W_g1)
-            F1 -= W_g.tocsr_cached() @ la_g
+            F1 -= W_g.tocsr(cached=True) @ la_g
         if sys.nla_gamma:
             W_gamma = self.W_gamma1 = self.system.W_gamma(
                 t, q, format="Coo", coo=self.W_gamma1
             )
-            F1 -= W_gamma.tocsr_cached() @ la_gamma
+            F1 -= W_gamma.tocsr(cached=True) @ la_gamma
         if sys.nla_c:
             W_c = self.W_c1 = self.system.W_c(t, q, format="Coo", coo=self.W_c1)
-            F1 -= W_c.tocsr_cached() @ la_c
+            F1 -= W_c.tocsr(cached=True) @ la_c
         F[self.split[0] : self.split[1]] = F1
 
         #######################
@@ -287,7 +287,7 @@ class ScipyDAE:
             W_c = self.W_c2 = self.system.W_c(t, q, format="Coo", coo=self.W_c2)
             Jyp["W_c", s0:s1, s4:] = -W_c
 
-        return Jy.tocsc_cached(), Jyp.tocsc_cached()
+        return Jy.tocsc(cached=True), Jyp.tocsc(cached=True)
 
         # note: Keep this for debugging the Jacobian
 
