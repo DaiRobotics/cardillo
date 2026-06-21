@@ -1,18 +1,18 @@
 from abc import ABC
 
-from cardillo.math import A_IB_basic
-from cardillo.discrete import Frame
 from cardillo.constraints import RigidConnection
-from cardillo.forces import Force, RodTendonForce
 from cardillo.rods.force_line_distributed import Force_line_distributed
 
-from cardillo.rods import CircularCrossSection, CrossSectionInertias, Simo1986
-from cardillo.rods.discreteRod import DiscreteRod
+from cardillo.rods import (
+    CircularCrossSection,
+    CrossSectionInertias,
+    Simo1986,
+    RodTendonForce,
+    DiscreteRod,
+)
 
 from cardillo.solver import ScipyDAE, BackwardEuler, Newton, SolverOptions, Solution
 from cardillo.system import System
-
-from cardillo.interactions import nPointInteraction
 
 import numpy as np
 from scipy.linalg import pinv
@@ -331,9 +331,9 @@ class CommonModel(ABC):
         for B_r_CP_list in B_r_CP_lists:
             n = len(B_r_CP_list)
             tendon = RodTendonForce(
-                rod=self.rod,
-                xi_list=[i / (n - 1) for i in range(n)],
-                B_r_CP_list=B_r_CP_list,
+                self.rod,
+                [i / (n - 1) for i in range(n)],
+                B_r_CPs=B_r_CP_list,
             )
             self.tendons.append(tendon)
 
@@ -634,17 +634,16 @@ cam.Zoom(1)
 
 
 # plotter.live_render()
+
+# from cProfile import Profile
+# sol = dynamic_model.solver.solve()
+# prof = Profile()
+# prof.enable()
+
 sol = dynamic_model.solver.solve()
 
-from cProfile import Profile
-
-prof = Profile()
-prof.enable()
-
-sol = dynamic_model.solver.solve()
-
-prof.disable()
-prof.dump_stats("profile.prof")
+# prof.disable()
+# prof.dump_stats("profile.prof")
 
 
 # plotter.render_solution(sol, True, play_speed_up=1)

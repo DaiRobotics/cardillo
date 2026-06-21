@@ -404,7 +404,7 @@ class VisualTendon(_VisualTwinBase):
         poly_data = vtk.vtkPolyData()
         # points
         npts = 2
-        ncon = self.contr.n_nodes
+        ncon = self.contr.n_vert
         self.vtkpoints = vtk.vtkPoints()
         self.vtkpoints.SetNumberOfPoints(npts * ncon)
         poly_data.SetPoints(self.vtkpoints)

@@ -1,7 +1,8 @@
+from abc import ABC
 import numpy as np
 from numpy.lib.stride_tricks import as_strided
 
-from jax import vmap, jit, jacfwd
+from jax import vmap, jit, jacrev
 from jax import numpy as jnp
 
 from cardillo.math_numba import (
@@ -61,20 +62,20 @@ def _combine_indices(rows_list, cols_list):
     return ptr, rows_combined, cols_combined
 
 
-class ElementKinematics:
+class ElementKinematics(ABC):
 
     @staticmethod
     @jit
-    def __r_OP(alpha, q, B_r_CP):
-        A_IB = ElementKinematics.__A_IB(alpha, q)
+    def r_OP(alpha, q, B_r_CP):
+        A_IB = ElementKinematics.A_IB(alpha, q)
         r_OC0, r_OC1 = q[:3], q[7:10]
         r_OC = r_OC0 + alpha * (r_OC1 - r_OC0)
         return r_OC + A_IB @ B_r_CP
 
     @staticmethod
     @jit
-    def __r_OP_q(alpha, q, B_r_CP):
-        A_IB_q = ElementKinematics.__A_IB_q(alpha, q)
+    def r_OP_q(alpha, q, B_r_CP):
+        A_IB_q = ElementKinematics.A_IB_q(alpha, q)
         r_OC_q = jnp.concatenate(
             [
                 (1.0 - alpha) * E3,  # cols 0:3
@@ -88,9 +89,9 @@ class ElementKinematics:
 
     @staticmethod
     @jit
-    def __v_P(alpha, q, u, B_r_CP):
-        A_IB = ElementKinematics.__A_IB(alpha, q)
-        B_Omega = ElementKinematics.__B_Omega(alpha, u)
+    def v_P(alpha, q, u, B_r_CP):
+        A_IB = ElementKinematics.A_IB(alpha, q)
+        B_Omega = ElementKinematics.B_Omega(alpha, u)
         v_C0 = u[:3]
         v_C1 = u[6:9]
         v_C = v_C0 + alpha * (v_C1 - v_C0)
@@ -98,15 +99,15 @@ class ElementKinematics:
 
     @staticmethod
     @jit
-    def __v_P_q(alpha, q, u, B_r_CP):
-        A_IB_q = ElementKinematics.__A_IB_q(alpha, q)
-        B_Omega = ElementKinematics.__B_Omega(alpha, u)
+    def v_P_q(alpha, q, u, B_r_CP):
+        A_IB_q = ElementKinematics.A_IB_q(alpha, q)
+        B_Omega = ElementKinematics.B_Omega(alpha, u)
         return math_jax.cross3(B_Omega, B_r_CP) @ A_IB_q
 
     @staticmethod
     @jit
-    def __J_P(alpha, q, B_r_CP):
-        A_IB = ElementKinematics.__A_IB(alpha, q)
+    def J_P(alpha, q, B_r_CP):
+        A_IB = ElementKinematics.A_IB(alpha, q)
         B_r_CP_tilde = math_jax.ax2skew(B_r_CP)
         r_CP_tilde = A_IB @ B_r_CP_tilde
 
@@ -122,8 +123,8 @@ class ElementKinematics:
 
     @staticmethod
     @jit
-    def __J_P_q(alpha, q, B_r_CP):
-        A_IB_q = ElementKinematics.__A_IB_q(alpha, q)
+    def J_P_q(alpha, q, B_r_CP):
+        A_IB_q = ElementKinematics.A_IB_q(alpha, q)
         B_r_CP_tilde = math_jax.ax2skew(B_r_CP)
         r_CP_tilde_q = B_r_CP_tilde.T @ A_IB_q
 
@@ -134,10 +135,10 @@ class ElementKinematics:
 
     @staticmethod
     @jit
-    def __a_P(alpha, q, u, u_dot, B_r_CP):
-        A_IB = ElementKinematics.__A_IB(alpha, q)
-        B_Omega = ElementKinematics.__B_Omega(alpha, u)
-        B_Psi = ElementKinematics.__B_Psi(alpha, u_dot)
+    def a_P(alpha, q, u, u_dot, B_r_CP):
+        A_IB = ElementKinematics.A_IB(alpha, q)
+        B_Omega = ElementKinematics.B_Omega(alpha, u)
+        B_Psi = ElementKinematics.B_Psi(alpha, u_dot)
         a_C0 = u_dot[:3]
         a_C1 = u_dot[6:9]
         a_C = a_C0 + alpha * (a_C1 - a_C0)
@@ -148,14 +149,14 @@ class ElementKinematics:
 
     @staticmethod
     @jit
-    def __A_IB(alpha, q):
+    def A_IB(alpha, q):
         P0, P1 = q[3:7], q[10:]
         P = P0 + alpha * (P1 - P0)
         return math_jax.Exp_SO3_quat_norm(P)
 
     @staticmethod
     @jit
-    def __A_IB_q(alpha, q):
+    def A_IB_q(alpha, q):
         P0, P1 = q[3:7], q[10:]
         P = P0 + alpha * (P1 - P0)
 
@@ -175,14 +176,14 @@ class ElementKinematics:
 
     @staticmethod
     @jit
-    def __B_Omega(alpha, u):
+    def B_Omega(alpha, u):
         B_Omega_1 = u[3:6]
         B_Omega_2 = u[9:12]
         return B_Omega_1 + alpha * (B_Omega_2 - B_Omega_1)
 
     @staticmethod
     @jit
-    def __B_Psi(alpha, u_dot):
+    def B_Psi(alpha, u_dot):
         """Since we use Petrov-Galerkin method we only interpolate the nodal
         time derivative of the angular velocities in the B-frame.
         """
@@ -191,102 +192,26 @@ class ElementKinematics:
         B_Psi = B_Psi_1 + alpha * (B_Psi_2 - B_Psi_1)
         return B_Psi
 
-    def __init__(self, alpha):
-
-        # allocate memery
-        self._B_Omega_q = np.zeros((3, 14), dtype=float)
-        self._B_J_R = np.zeros((3, 12), dtype=float)
-        self._B_J_R[0, 3] = self._B_J_R[1, 4] = self._B_J_R[2, 5] = 1 - alpha
-        self._B_J_R[0, 9] = self._B_J_R[1, 10] = self._B_J_R[2, 11] = alpha
-        self._B_J_R_q = np.zeros((3, 12, 14), dtype=float)
-        self._B_Psi_q = np.zeros((3, 14), dtype=float)
-        self._B_Psi_u = np.zeros((3, 12), dtype=float)
-
-        self._A_IB_cache = MyLRUCache(maxsize=5)
-        self._A_IB_q_cache = MyLRUCache(maxsize=5)
-        self._r_OP = jit(lambda q, B_r_CP: ElementKinematics.__r_OP(alpha, q, B_r_CP))
-        self._r_OP_q = jit(
-            lambda q, B_r_CP: ElementKinematics.__r_OP_q(alpha, q, B_r_CP)
+    @staticmethod
+    @jit
+    def B_J_R(alpha):
+        return jnp.array(
+            [
+                [0, 0, 0, 1 - alpha, 0, 0, 0, 0, 0, alpha, 0, 0],
+                [0, 0, 0, 0, 1 - alpha, 0, 0, 0, 0, 0, alpha, 0],
+                [0, 0, 0, 0, 0, 1 - alpha, 0, 0, 0, 0, 0, alpha],
+            ]
         )
-        self._v_P = jit(
-            lambda q, u, B_r_CP: ElementKinematics.__v_P(alpha, q, u, B_r_CP)
-        )
-        self._v_P_q = jit(
-            lambda q, u, B_r_CP: ElementKinematics.__v_P_q(alpha, q, u, B_r_CP)
-        )
-        self._J_P = jit(lambda q, B_r_CP: ElementKinematics.__J_P(alpha, q, B_r_CP))
-        self._J_P_q = jit(lambda q, B_r_CP: ElementKinematics.__J_P_q(alpha, q, B_r_CP))
-        self._a_P = jit(
-            lambda q, u, u_dot, B_r_CP: ElementKinematics.__a_P(
-                alpha, q, u, u_dot, B_r_CP
-            )
-        )
-        self._A_IB = jit(lambda q: ElementKinematics.__A_IB(alpha, q))
-        self._A_IB_q = jit(lambda q: ElementKinematics.__A_IB_q(alpha, q))
-        self._B_Omega = jit(lambda u: ElementKinematics.__B_Omega(alpha, u))
-        self._B_Psi = jit(lambda u_dot: ElementKinematics.__B_Psi(alpha, u_dot))
 
-    ##########################
-    # r_OP / A_IB contribution
-    ##########################
+    r_OP_batch = jit(vmap(r_OP.__func__))
+    r_OP_q_batch = jit(vmap(r_OP_q.__func__))
+    J_P_batch = jit(vmap(J_P.__func__))
+    J_P_q_batch = jit(vmap(J_P_q.__func__))
 
-    def r_OP(self, q, B_r_CP=np.zeros(3, dtype=float)):
-        return self._r_OP(q, B_r_CP)
-
-    def r_OP_q(self, q, B_r_CP=np.zeros(3, dtype=float)):
-        return self._r_OP_q(q, B_r_CP)
-
-    def v_P(self, q, u, B_r_CP=np.zeros(3, dtype=float)):
-        return self._v_P(q, u, B_r_CP)
-
-    def v_P_q(self, q, u, B_r_CP=np.zeros(3, dtype=float)):
-        return self._v_P_q(q, u, B_r_CP)
-
-    def J_P(self, q, B_r_CP=np.zeros(3, dtype=float)):
-        return self._J_P(q, B_r_CP)
-
-    def J_P_q(self, q, B_r_CP=np.zeros(3, dtype=float)):
-        return self._J_P_q(q, B_r_CP)
-
-    def a_P(self, q, u, u_dot, B_r_CP=np.zeros(3, dtype=float)):
-        return self._a_P(q, u, u_dot, B_r_CP)
-
-    def A_IB(self, q):
-        key = q.tobytes()
-        A_IB = self._A_IB_cache[key]
-        if A_IB is None:
-            A_IB = self._A_IB(q)
-            self._A_IB_cache[key] = A_IB
-        return A_IB
-
-    def A_IB_q(self, q):
-        key = q.tobytes()
-        A_IB_q = self._A_IB_q_cache[key]
-        if A_IB_q is None:
-            A_IB_q = self._A_IB_q(q)
-            self._A_IB_q_cache[key] = A_IB_q
-        return A_IB_q
-
-    def B_Omega(self, u):
-        return self._B_Omega(u)
-
-    def B_Omega_q(self):
-        return self._B_Omega_q
-
-    def B_J_R(self):
-        return self._B_J_R
-
-    def B_J_R_q(self):
-        return self._B_J_R_q
-
-    def B_Psi(self, u_dot):
-        return self._B_Psi(u_dot)
-
-    def B_Psi_q(self):
-        return self._B_Psi_q
-
-    def B_Psi_u(self):
-        return self._B_Psi_u
+    B_Omega_q = np.zeros((3, 14), dtype=float)
+    B_J_R_q = np.zeros((3, 12, 14), dtype=float)
+    B_Psi_q = np.zeros((3, 14), dtype=float)
+    B_Psi_u = np.zeros((3, 12), dtype=float)
 
 
 class DiscreteRod:
@@ -547,7 +472,7 @@ class DiscreteRod:
         return B_gamma_dot_qe, B_kappa_dot_qe
 
     # TODO: analytical function
-    _eval_dot_u_el = jit(jacfwd(_eval_dot_el.__func__, argnums=1))
+    _eval_dot_u_el = jit(jacrev(_eval_dot_el.__func__, argnums=1))
 
     _q_dot_nodes = jit(vmap(_q_dot_node.__func__))
     _p_dot_p_nodes = jit(vmap(_p_dot_p_node.__func__))
@@ -665,8 +590,6 @@ class DiscreteRod:
 
         # reference strain
         _, self.B_gamma0, self.B_kappa0 = self._eval(Q)
-
-        self._kinematics_els = {}
 
         self.__init_coo__(cross_section_inertias)
 
@@ -919,14 +842,6 @@ class DiscreteRod:
         q_body = q[self.qDOF]
         return np.array([q_body[nodalDOF] for nodalDOF in self.nodalDOF_r]).T
 
-    def _el_kinematics(self, xi):
-        try:
-            el_kin = self._kinematics_els[xi]
-        except KeyError:
-            el_kin = ElementKinematics(self._alpha(xi))
-            self._kinematics_els[xi] = el_kin
-        return el_kin
-
     @staticmethod
     def straight_configuration(
         nelement,
@@ -1113,52 +1028,66 @@ class DiscreteRod:
     # r_OP / A_IB contribution
     ##########################
     def r_OP(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self._el_kinematics(xi).r_OP(qe, B_r_CP).__array__()
+        alpha = self._alpha(xi)
+        return ElementKinematics.r_OP(alpha, qe, B_r_CP).__array__()
 
     def r_OP_q(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self._el_kinematics(xi).r_OP_q(qe, B_r_CP).__array__()
+        alpha = self._alpha(xi)
+        return ElementKinematics.r_OP_q(alpha, qe, B_r_CP).__array__()
 
     def v_P(self, t, qe, ue, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self._el_kinematics(xi).v_P(qe, ue, B_r_CP).__array__()
+        alpha = self._alpha(xi)
+        return ElementKinematics.v_P(alpha, qe, ue, B_r_CP).__array__()
 
     def v_P_q(self, t, qe, ue, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self._el_kinematics(xi).v_P_q(qe, ue, B_r_CP).__array__()
+        alpha = self._alpha(xi)
+        return ElementKinematics.v_P_q(alpha, qe, ue, B_r_CP).__array__()
 
     def J_P(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self._el_kinematics(xi).J_P(qe, B_r_CP).__array__()
+        alpha = self._alpha(xi)
+        return ElementKinematics.J_P(alpha, qe, B_r_CP).__array__()
 
     def J_P_q(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self._el_kinematics(xi).J_P_q(qe, B_r_CP).__array__()
+        alpha = self._alpha(xi)
+        return ElementKinematics.J_P_q(alpha, qe, B_r_CP).__array__()
 
     def a_P(self, t, qe, ue, ue_dot, xi, B_r_CP=np.zeros(3, dtype=float)):
-        return self._el_kinematics(xi).a_P(qe, ue, ue_dot, B_r_CP).__array__()
+        alpha = self._alpha(xi)
+        return ElementKinematics.a_P(alpha, qe, ue, ue_dot, B_r_CP).__array__()
 
     def A_IB(self, t, qe, xi):
-        return self._el_kinematics(xi).A_IB(qe).__array__()
+        alpha = self._alpha(xi)
+        return ElementKinematics.A_IB(alpha, qe).__array__()
 
     def A_IB_q(self, t, qe, xi):
-        return self._el_kinematics(xi).A_IB_q(qe).__array__()
+        alpha = self._alpha(xi)
+        return ElementKinematics.A_IB_q(alpha, qe).__array__()
 
     def B_Omega(self, t, qe, ue, xi):
-        return self._el_kinematics(xi).B_Omega(ue).__array__()
+        alpha = self._alpha(xi)
+        return ElementKinematics.B_Omega(alpha, ue).__array__()
 
     def B_Omega_q(self, t, qe, ue, xi):
-        return self._el_kinematics(xi).B_Omega_q()
+        alpha = self._alpha(xi)
+        return ElementKinematics.B_Omega_q
 
     def B_J_R(self, t, qe, xi):
-        return self._el_kinematics(xi).B_J_R()
+        alpha = self._alpha(xi)
+        return ElementKinematics.B_J_R(alpha).__array__()
 
     def B_J_R_q(self, t, qe, xi):
-        return self._el_kinematics(xi).B_J_R_q()
+        alpha = self._alpha(xi)
+        return ElementKinematics.B_J_R_q
 
     def B_Psi(self, t, qe, ue, ue_dot, xi):
-        return self._el_kinematics(xi).B_Psi(ue_dot).__array__()
+        alpha = self._alpha(xi)
+        return ElementKinematics.B_Psi(alpha, ue_dot).__array__()
 
     def B_Psi_q(self, t, qe, ue, ue_dot, xi):
-        return self._el_kinematics(xi).B_Psi_q()
+        return ElementKinematics.B_Psi_q
 
     def B_Psi_u(self, t, qe, ue, ue_dot, xi):
-        return self._el_kinematics(xi).B_Psi_u()
+        return ElementKinematics.B_Psi_u
 
     def export(self, sol_i, **kwargs):
         if not hasattr(self, "_visual_twin"):

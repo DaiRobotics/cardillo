@@ -262,9 +262,9 @@ class CooMatrix:
             csr = self._csr_cached = self.tocsr(copy=False)
         return csr
 
-    def toarray(self, copy=False):
+    def toarray(self, copy=False, cached=True):
         """Convert container to 2D numpy array."""
-        return self.tocoo(copy).toarray()
+        return self.tocoo(copy, cached).toarray()
 
     def transpose(self, copy=False, coo=None):
         if coo is None:
@@ -291,7 +291,7 @@ class CooMatrix:
         ret.col = self.col.copy()
         ret.data = -self.data
         return ret
-    
+
     def __add__(self, other):
         ret = CooMatrix(self.shape)
         if isinstance(other, CooMatrix):
@@ -301,10 +301,10 @@ class CooMatrix:
             return ret
         else:
             return NotImplementedError
-    
+
     def __radd__(self, other):
         return self.__add__(other)
-    
+
     def __sub__(self, other):
         if isinstance(other, CooMatrix):
             ret = CooMatrix(self.shape)
@@ -314,7 +314,7 @@ class CooMatrix:
             return ret
         else:
             return NotImplementedError
-    
+
     def __rsub__(self, other):
         if isinstance(other, CooMatrix):
             ret = CooMatrix(self.shape)
