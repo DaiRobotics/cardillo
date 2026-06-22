@@ -397,9 +397,7 @@ class VisualCoordSystem(_VisualvtkSource):
 
 
 class VisualTendon(_VisualTwinBase):
-    def __init__(
-        self, tendon: nPointInteraction, radius=1e-3, color=(255, 255, 255), opacity=1
-    ):
+    def __init__(self, tendon, radius=1e-3, color=(255, 255, 255), opacity=1):
         super().__init__(tendon)
         poly_data = vtk.vtkPolyData()
         # points
@@ -437,10 +435,11 @@ class VisualTendon(_VisualTwinBase):
         self.actors.append(actor)
 
     def update_visual_state(self, sol_i):
-        t, q = sol_i.t, sol_i.q[self.contr.qDOF]
+        tendon = self.contr
+        t, q = sol_i.t, sol_i.q[tendon.qDOF]
         points = []
-        r_OPk = [self.contr.r_OPk(t, q, k) for k in range(self.contr.n_nodes)]
-        for k in range(self.contr.n_nodes - 1):
+        r_OPk = tendon.r_OP_vert(q)
+        for k in range(tendon.n_vert - 1):
             points.append(r_OPk[k])
             points.append(r_OPk[k + 1])
         for i, p in enumerate(points):

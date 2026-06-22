@@ -75,9 +75,10 @@ def cantilever_beam(Rod, profile=False):
     system.assemble()
 
     t1 = 3
-    rtol = 1e-3
-    atol = 1e-6
-    solver = ScipyDAE(system, t1, t1 / 1000, rtol=rtol, atol=atol)
+    # rtol = 1e-3
+    # atol = 1e-6
+    # solver = ScipyDAE(system, t1, t1 / 1000, rtol=rtol, atol=atol)
+    solver = BackwardEuler(system, t1, 1e-2)
 
     if profile:
         solver.fun(0.0, solver.y0, solver.y0)
