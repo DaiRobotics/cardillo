@@ -3,11 +3,10 @@ from abc import ABC
 from cardillo.math import A_IB_basic
 from cardillo.discrete import Frame
 from cardillo.constraints import RigidConnection
-from cardillo.forces import Force, TendonForce
+from cardillo.forces import Force
 from cardillo.rods.force_line_distributed import Force_line_distributed
 
-from cardillo.rods import CircularCrossSection, CrossSectionInertias, Simo1986
-from cardillo.rods.discreteRod import DiscreteRod
+from cardillo.rods import CircularCrossSection, CrossSectionInertias, Simo1986, DiscreteRod, RodTendonForce
 
 from cardillo.solver import ScipyDAE, BackwardEuler, Newton, SolverOptions, Solution
 from cardillo.system import System
@@ -136,7 +135,7 @@ class TendonForceControl:
         r_OP_traj,
         la_t_ref,
         rod, 
-        tendons:list[TendonForce],
+        tendons:list[RodTendonForce],
         static_model=None,
         gamma_eps=1.0,
         gamma_check_dt = 1.0,
@@ -340,11 +339,10 @@ class CommonModel(ABC):
         ]
         for B_r_CP_list in B_r_CP_lists:
             n = len(B_r_CP_list)
-            tendon = TendonForce(
-                subsystem_list=[self.rod.get_marker(i / (n - 1)) for i in range(n)],
-                connectivity=[(i, i + 1) for i in range(n - 1)],
-                xi_list=[i / (n - 1) for i in range(n)],
-                B_r_CP_list=B_r_CP_list,
+            tendon = RodTendonForce(
+                self.rod,
+                xis=[i / (n - 1) for i in range(n)],
+                B_r_CPs=B_r_CP_list,
             )
             self.tendons.append(tendon)
 
@@ -443,6 +441,7 @@ class DynamicModel(CommonModel):
             dt=1e-2,
             options=SolverOptions(compute_consistent_initial_conditions=True)
         )
+        # self.solver = ScipyDAE(self.system, t1=t_sim, dt=1e-2)
 
 
 
@@ -464,16 +463,6 @@ def paper_to_cardillo(u):
     X, Y, Z = u
     return np.array([Y, Z, X])
 
-SETPOINT_TABLE = {
-    "A": np.array([15.438e-2, 4.335e-2, 3.399e-2]),
-    "B": np.array([15.272e-2, -5.114e-2, -0.463e-2]),
-    "C": np.array([10.888e-2, 9.106e-2, -5.492e-2]),
-    "D": np.array([14.615e-2, -4.486e-2, -6.375e-2]),
-    "E": np.array([13.951e-2, 0.000e-2, -9.842e-2]),
-    "E2": np.array([13.951e-2, 0.000e-2, -9.842e-2])*1.2,
-}
-SETPOINT_TABLE = {k: paper_to_cardillo(u) for k, u in SETPOINT_TABLE.items()}
-
 def make_circle(x_fn, y_fn, z_fn, t_period):
     def ref(t):
         th = 2.0 * np.pi * t / t_period - np.pi / 2  # start at circle bottom (near E)
@@ -492,39 +481,8 @@ def make_star_yz(y_c=0.0, z_c=-3.0e-2, R=6.5e-2, x_const=13.5e-2, t_total=70.0):
         y, z = (1.0 - a) * pts[i] + a * pts[i + 1]
         return paper_to_cardillo(np.array([x_const, y, z]))
     return ref
-
-if traj_mode == "p2p":
-    t_end = 50
-    sequence = ["A", "B", "C", "D", "E"]
-    hold_t = t_end / (len(sequence))
-
-    def r_OP_ref_fn(t):
-        k = min(int(t / hold_t), len(sequence) - 1)
-        # return SETPOINT_TABLE["E2"]
-        return SETPOINT_TABLE[sequence[k]]
-    
-    la_t_ref_table = []
-    q0_table = []
-    Gamma0_table = []
-    
-    for name in sequence:
-        r_OP_ref = SETPOINT_TABLE[name]
-        # la_ref, _, _ = solve_ref_config(r_OP_ref, la_t0, tol = 3e-4, force_steps=20)
-        la_t_ref, q0, Gamma0 = solve_ref_config(r_OP_ref, la_t0, force_steps=20)
-        la_t_ref_table.append(la_t_ref)
-        q0_table.append(q0)
-        Gamma0_table.append(Gamma0)
-        print(f"{name}")
-    def la_t_ref_fn(t):
-        if t == 0.0:
-            return la_t_ref_table[-1]
-        k = min(int(t / hold_t), len(sequence) - 1)
-        return la_t_ref_table[k]
-
         
-
-
-elif traj_mode == "circle_zy":
+if traj_mode == "circle_zy":
     x_c, z_c, rad = 10.3e-2, -1.75e-2, 3.0e-2
     t_period = 40.0 * t_scale  # [s] per lap (paper: 2 laps in ~80 s)
     t_end = 2 * t_period
@@ -554,88 +512,6 @@ elif traj_mode == "star_yz":
 else:
     raise ValueError(f"unknown tdcm_traj mode: {traj_mode!r}")
 
-# ----- reference Gamma -----
-
-
-# ---- build controller ----
-# if traj_mode == "p2p":
-#     gamma_table = {}
-#     la_table = {}
-#     q_table = {}
-#     lambda_t0 = la_t0
-#     for name in sequence:
-#         r_OP_ref = SETPOINT_TABLE[name]
-#         # r_OP_ref = r_OP_ref_fn(0.0)  
-#         la_t0, q0, Gamma0 = solve_ref_config(r_OP_ref, tol=1e-7, lambda_t0=lambda_t0, force_steps=3)
-#         gamma_table[name] = Gamma0
-#         la_table[name] = la_t0
-#         q_table[name] = q0
-#         lambda_t0 = la_t0
-
-#     def gamma_fn(t):
-#         k = min(int(t / hold_t), len(sequence) - 1)
-#         return gamma_table[sequence[k]]
-    
-#     Gamma = gamma_fn
-#     la_t0 = la_table[sequence[0]]
-#     q0 = q_table[sequence[0]]
-
-# else:
-#     setpoint = "E"
-#     r_OP_ref = SETPOINT_TABLE[setpoint]
-#     la_t0, q0, Gamma0 = solve_ref_config(r_OP_ref, tol=1e-7, lambda_t0=la_t0, force_steps=3)
-
-# setpoint = "E"
-# r_OP_ref = SETPOINT_TABLE[setpoint]
-# # # r_OP_ref = r_OP_ref_fn(0.0)  
-# la_t0, q0, Gamma0 = solve_ref_config(r_OP_ref, tol=3e-4, lambda_t0=la_t0, force_steps=10)
-
-q0 = q0_table[-1]
-Gamma0 = Gamma0_table[-1]
-
-# Kp = 0.5
-# Kp = 0.2
-Kp = 0.1
-t_sim = t_end
-dynamic_model = DynamicModel(t_sim, Kp, Gamma0, la_t0, r_OP_ref_fn, la_t_ref_fn, q0)
-
-
-
-# ---- visualization ----
-rod = dynamic_model.rod
-tendons = dynamic_model.tendons
-system = dynamic_model.system
-
-from cardillo.visualization import Plotter, VisualDiscreteRod, VisualTendon
-
-VisualDiscreteRod(rod, subdivision=4, opacity=0.3)
-for tendon in tendons:
-    VisualTendon(tendon, radius=1e-3, color=(0, 200, 50))
-
-window_size = (960, 540)
-plotter = Plotter(system, window_size)
-plotter.add_ground(-0.2, 0.2, -0.2, 0.2, 10, 10)
-r_OF = np.array([0, -0.05, 0.10], float)
-r_OC = r_OF + np.array([0, 0, 0.45], float)
-e_x_cam = np.array([1, 0, 0], float)
-e_z_cam = r_OF - r_OC
-e_z_cam /= np.linalg.norm(e_z_cam)
-e_y_cam = np.cross(e_z_cam, e_x_cam)
-fx = 2635.5177
-px, py = 3840, 2160
-cam = plotter.camera
-cam.view_angle = np.rad2deg(np.arctan(min(px, py) / 2 / fx) * 2)
-cam.parallel_projection = False
-cam.position = r_OC
-cam.focal_point = r_OF
-cam.view_up = -e_y_cam
-cam.clipping_range = (0.01, 2)
-cam.Zoom(1)
-
-
-# plotter.live_render()
-sol = dynamic_model.solver.solve()
-plotter.render_solution(sol, True, play_speed_up=1)
 
 from matplotlib import pyplot as plt
 
@@ -705,50 +581,5 @@ r_OP_traj = np.array([r_OP_ref_fn(ti) for ti in t])
 
 # fig.suptitle(f"Trajectory tracking in Z-Y plane")
 # fig.tight_layout()
-
-# ---- Point to Point plots ----
-fig = plt.figure(figsize=(8, 6))
-gs = fig.add_gridspec(3, 1)
-
-atx = fig.add_subplot(gs[0, 0])
-atx.plot(t, q[:, -1, 0] * 100, "r", label="actual")
-atx.plot(t, r_OP_traj[:, 0] * 100, "b--", label="desired")
-atx.set_xlabel("Time [s]")
-atx.set_xlim(0, 50)
-atx.set_xticks(np.arrange(0, 50.1, 5))
-atx.set_ylabel("X [cm]")
-atx.set_ylim(-5.2, 10)
-atx.set_yticks(np.array([-5, 0, 5, 10]))
-atx.legend()
-atx.grid(True)
-
-aty = fig.add_subplot(gs[1, 0])
-aty.plot(t, q[:, -1, 1] * 100, "r", label="actual")
-aty.plot(t, r_OP_traj[:, 1] * 100, "b--", label="desired")
-aty.set_xlabel("Time [s]")
-aty.set_xlim(0, 50)
-aty.set_xticks(np.arrange(0, 50.1, 5))
-aty.set_ylabel("Y [cm]")
-aty.set_ylim(-10, 5)
-aty.set_yticks(np.array([-10, -5, 0, 5]))
-aty.legend()
-aty.grid(True)
-
-atz = fig.add_subplot(gs[2, 0])
-atz.plot(t, q[:, -1, 2] * 100, "r", label="actual")
-atz.plot(t, r_OP_traj[:, 2] * 100, "b--", label="desired")
-atz.set_xlabel("Time [s]")
-atz.set_xlim(0, 50)
-atz.set_xticks(np.arrange(0, 50.1, 5))
-atz.set_ylabel("Z [cm]")
-atz.set_ylim(10, 18)
-atz.set_yticks(np.arrange(10, 18.1, 2))
-atz.legend()
-atz.grid(True)
-
-fig.suptitle(f"Trajectory tracking (point-to-point)")
-fig.tight_layout()
-
-
 
 plt.show()
