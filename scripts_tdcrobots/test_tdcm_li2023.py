@@ -19,6 +19,9 @@ from scipy.linalg import pinv
 from scipy.sparse.linalg import splu
 
 
+G_ACCEL = 9.81
+
+
 def solve_ref_config(r_OP_ref, lambda_t0, tol=5e-4, damping=1e-4, force_steps=10):
     static_model = StaticModel()
 
@@ -339,30 +342,30 @@ class CommonModel(ABC):
 
         self.system.add(self.rod, rc, *self.tendons)
 
+        # ---- external forces ----
+        self.gravity = Force_line_distributed(
+            lambda t, xi: self.rod_density
+            * self.cross_section.area(xi)
+            * G_ACCEL
+            * t
+            * np.array([0, -1.0, 0], dtype=np.float64),
+            self.rod,
+        )
+        self.system.add(self.gravity)
+
 
 class StaticModel(CommonModel):
     def __init__(self):
         super().__init__()
-        g_acc = 9.81
-        # ---- external forces ----
-        gravity = Force_line_distributed(
-            lambda t, xi: self.rod_density
-            * self.cross_section.area(xi)
-            * g_acc
-            * np.array([0, -1.0, 0], dtype=np.float64)
-            * t,
-            self.rod,
-        )
-        self.system.add(gravity)
         self.system.assemble()
 
         self.solver = StaticSolver(
             self.system,
             n_load_steps=1,
             verbose=False,
-            # options=SolverOptions(continue_with_unconverged=False),
         )
-        self.force_init = np.array([td.la(0) for td in self.tendons])
+        self.la_t_init = np.array([td.la(0) for td in self.tendons])
+        self.g_acc_init = 0
         self.nt = -1
 
     def apply_forces(
@@ -379,9 +382,19 @@ class StaticModel(CommonModel):
         # -----------
         #   tendons
         # -----------
-        _forces = np.vstack((self.force_init, forces))
+        _forces = np.vstack((self.la_t_init, forces))
         for i, tendon in enumerate(self.tendons):
             tendon.set_force(lambda t, i=i: interp1d(ts, _forces[:, i], t))
+        # ------------
+        #   Gravity
+        # ------------
+        _force = (
+            lambda t, xi: self.rod_density
+            * self.cross_section.area(xi)
+            * (self.g_acc_init + t * (G_ACCEL - self.g_acc_init))
+            * np.array([0, -1.0, 0], dtype=np.float64)
+        )
+        self.gravity._h_nodes = Force_line_distributed._make_h_nodes(_force)
         # ------------
         #   Solve
         # ------------
@@ -406,23 +419,14 @@ class StaticModel(CommonModel):
                 self.solver.x[force_steps::force_steps],
             )
         if warm_start:
-            self.force_init = forces[-1]
+            self.la_t_init = forces[-1]
+            self.g_acc_init = G_ACCEL
         return Solution(self.solver.system, t, q, la_g=la_g), x, self.solver
 
 
 class DynamicModel(CommonModel):
     def __init__(self, t_sim, Kp, Gamma, la_t0, r_OP_traj, q0=None):
         super().__init__()
-        g_acc = 9.81
-        # ---- external forces ----
-        gravity = Force_line_distributed(
-            lambda t, xi: self.rod_density
-            * self.cross_section.area(xi)
-            * g_acc
-            * np.array([0, -1.0, 0], dtype=np.float64),
-            self.rod,
-        )
-        static_model = StaticModel()
         self.controller = TendonForceControl(
             Kp,
             Gamma,
@@ -433,12 +437,22 @@ class DynamicModel(CommonModel):
             gamma_eps=1.0,
             gamma_check_dt=1.0,
         )
-        for td, la in zip(self.tendons, la_t0):
-            td.set_force(lambda t, la=la: la)
-
-        self.system.add(gravity)
         self.system.add(self.controller)
         self.system.assemble()
+
+        # ------------
+        #   Gravity
+        # ------------
+        _force = (
+            lambda t, xi: self.rod_density
+            * self.cross_section.area(xi)
+            * G_ACCEL
+            * np.array([0, -1.0, 0], dtype=np.float64)
+        )
+        self.gravity._h_nodes = Force_line_distributed._make_h_nodes(_force)
+
+        for td, la in zip(self.tendons, la_t0):
+            td.set_force(lambda t, la=la: la)
 
         # set initial state of the system
         if q0 is not None:
@@ -449,7 +463,6 @@ class DynamicModel(CommonModel):
             self.system,
             t1=t_sim,
             dt=1e-2,
-            # options=SolverOptions(compute_consistent_initial_conditions=False)
         )
 
 
@@ -585,13 +598,11 @@ else:
 #     r_OP_ref = SETPOINT_TABLE[setpoint]
 #     la_t0, q0, Gamma0 = solve_ref_config(r_OP_ref, tol=1e-7, lambda_t0=la_t0, force_steps=3)
 
-setpoint = "E"
+setpoint = "A"
 r_OP_ref = SETPOINT_TABLE[setpoint]
 # # r_OP_ref = r_OP_ref_fn(0.0)
 
-la_t0, q0, Gamma0 = solve_ref_config(
-    r_OP_ref, tol=1e-7, lambda_t0=la_t0, force_steps=10
-)
+la_t0, q0, Gamma0 = solve_ref_config(r_OP_ref, tol=1e-7, lambda_t0=la_t0, force_steps=3)
 
 # static_model.apply_forces(la_t0)
 # la_t0, q0, Gamma0 = np.zeros(4), None, np.ones((3,4))

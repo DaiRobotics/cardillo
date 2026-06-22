@@ -6,6 +6,13 @@ from cardillo.rods import DiscreteRod
 
 
 class Force_line_distributed:
+    @staticmethod
+    def _make_h_nodes(force):
+        def h_node(t, xi, weight):
+            return jnp.pad(force(t, xi), (0, 3)) * weight
+
+        return jit(vmap(h_node, in_axes=(None, 0, 0)))
+
     def __init__(self, force, rod):
         r"""Line distributed dead load for rods
 
@@ -28,7 +35,7 @@ class Force_line_distributed:
             self._h_weights = (
                 np.pad(rod.L_els, (1, 0)) + np.pad(rod.L_els, (0, 1))
             ) / 2
-            self._h_nodes = _make_h_nodes(_force)
+            self._h_nodes = Force_line_distributed._make_h_nodes(_force)
         else:
             self.force = _force
 
@@ -100,10 +107,3 @@ class Force_line_distributed:
                 )
 
         return he
-
-
-def _make_h_nodes(force):
-    def h_node(t, xi, weight):
-        return jnp.pad(force(t, xi), (0, 3)) * weight
-
-    return jit(vmap(h_node, in_axes=(None, 0, 0)))

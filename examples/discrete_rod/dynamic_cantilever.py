@@ -43,7 +43,7 @@ def cantilever_beam(Solver, Rod, profile=False):
         material_model,
         nelement,
         Q=Q,
-        cross_section_inertias=cross_section_inertias
+        cross_section_inertias=cross_section_inertias,
     )
 
     # nodes = rod.nodes
