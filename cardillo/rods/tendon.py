@@ -105,6 +105,12 @@ class RodTendonForce:
             )
         )
 
+        self.r_OP_vert = jit(
+            lambda q: ElementKinematics.r_OP_batch(
+                alpha_vert, q.reshape((self.n_vert, -1)), self.B_r_CPs
+            )
+        )
+
         self._nq = np.arange(self.n_vert * 14 + 1, step=14)
         self._nu = np.arange(self.n_vert * 12 + 1, step=12)
 

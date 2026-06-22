@@ -118,6 +118,7 @@ class BackwardEuler:
 
         self._J_x_coo = CooMatrix((self.nx, self.nx))
         self._J_y_coo = CooMatrix((self.nx, self.ny))
+        self.g_x_coo = CooMatrix((self.ny, self.nq + self.nu))
 
         # initial mass matrix and force directions for prox-parameter estimation
         self.M_coo = system.M(self.tn, self.qn, format="Coo", coo=self.M_coo)
@@ -165,17 +166,18 @@ class BackwardEuler:
         self.W_N_coo = self.system.W_N(tn1, qn1, format="Coo", coo=self.W_N_coo)
         self.W_F_coo = self.system.W_F(tn1, qn1, format="Coo", coo=self.W_F_coo)
         R_x[self.split_x[0] : self.split_x[1]] = (
-            self.M_coo.tocsr(cached=True) @ dun1
+            self.M_coo.tocsr(fix_size=True) @ dun1
             - dt
             * (
                 self.system.h(tn1, qn1, un1)
-                + self.W_tau_coo.tocsr(cached=True) @ self.system.la_tau(tn1, qn1, un1)
+                + self.W_tau_coo.tocsr(fix_size=True)
+                @ self.system.la_tau(tn1, qn1, un1)
             )
-            - self.W_g_coo.tocsr(cached=True) @ dP_gn1
-            - self.W_gamma_coo.tocsr(cached=True) @ dP_gamman1
-            - self.W_c.tocsr(cached=True) @ dP_cn1
-            - self.W_N_coo.tocsr(cached=True) @ dP_Nn1
-            - self.W_F_coo.tocsr(cached=True) @ dP_Fn1
+            - self.W_g_coo.tocsr(fix_size=True) @ dP_gn1
+            - self.W_gamma_coo.tocsr(fix_size=True) @ dP_gamman1
+            - self.W_c.tocsr(fix_size=True) @ dP_cn1
+            - self.W_N_coo.tocsr(fix_size=True) @ dP_Nn1
+            - self.W_F_coo.tocsr(fix_size=True) @ dP_Fn1
         )
 
         #######################
@@ -289,7 +291,7 @@ class BackwardEuler:
         #     format="csc",
         # )
         # fmt: on
-        return J_x.tocsc(cached=True)
+        return J_x.tocsc(fix_size=True)
 
     def J_y(self, xn1, yn1):
         s1, s2 = self.split_x[:2]
@@ -423,22 +425,22 @@ class BackwardEuler:
             #     [self.nla_N],
             # )
 
-            A = -lu.solve(self.J_y(self.xn, self.yn).toarray())
+            A = -lu.solve(self.J_y(self.xn, self.yn).toarray(fix_size=True))
 
-            g_x_coo = CooMatrix((self.ny, self.nq + self.nu))
-            g_x_coo[: self.nla_N, : self.nq] = self.system.g_N_q(self.tn, self.qn)
-            g_x_coo[self.nla_N :, : self.nq] = self.system.gamma_F_q(
+            g_x_coo = self.g_x_coo
+            g_x_coo[0, : self.nla_N, : self.nq] = self.system.g_N_q(self.tn, self.qn)
+            g_x_coo[1, self.nla_N :, : self.nq] = self.system.gamma_F_q(
                 self.tn, self.qn, self.un
             )
-            g_x_coo[self.nla_N :, self.nq :] = self.W_F_coo.T
+            g_x_coo[2, self.nla_N :, self.nq :] = self.W_F_coo.T
             # fmt: off
             # g_x = bmat([
             #     [             self.system.g_N_q(self.tn, self.qn),       None],
-            #     [self.system.gamma_F_q(self.tn, self.qn, self.un), self.W_F_coo.tocsr(cached=True).T],
+            #     [self.system.gamma_F_q(self.tn, self.qn, self.un), self.W_F_coo.tocsr(fix_size=True).T],
             # ])
             # fmt: on
             prox_r = self.options.prox_scaling / np.abs(
-                g_x_coo.tocsr(cached=True) @ A[: self.split_x[1]]
+                g_x_coo.tocsr(fix_size=True) @ A[: self.split_x[1]]
             ).sum(axis=1)
             self.prox_r_N, self.prox_r_F = np.array_split(prox_r, self.split_y)
             self.prox_r_N *= self.dt
