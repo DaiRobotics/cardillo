@@ -17,7 +17,7 @@ from cardillo.rods import DiscreteRod
 import cProfile
 
 
-def cantilever_beam(Rod, profile=False):
+def cantilever_beam(Solver, Rod, profile=False):
     nelement = 20
     L = 1
     mass = 0.4
@@ -43,7 +43,7 @@ def cantilever_beam(Rod, profile=False):
         material_model,
         nelement,
         Q=Q,
-        cross_section_inertias=cross_section_inertias,
+        cross_section_inertias=cross_section_inertias
     )
 
     # nodes = rod.nodes
@@ -75,10 +75,7 @@ def cantilever_beam(Rod, profile=False):
     system.assemble()
 
     t1 = 3
-    # rtol = 1e-3
-    # atol = 1e-6
-    # solver = ScipyDAE(system, t1, t1 / 1000, rtol=rtol, atol=atol)
-    solver = BackwardEuler(system, t1, 1e-2)
+    solver = Solver(system, t1, 1e-2)
 
     if profile:
         solver.fun(0.0, solver.y0, solver.y0)
@@ -99,8 +96,8 @@ def cantilever_beam(Rod, profile=False):
 
 Rod = make_CosseratRod(polynomial_degree=1)
 
-t1, q_rod1 = cantilever_beam(DiscreteRod, profile=False)
-t2, q_rod2 = cantilever_beam(Rod, profile=False)
+t1, q_rod1 = cantilever_beam(ScipyDAE, DiscreteRod, profile=False)
+t2, q_rod2 = cantilever_beam(ScipyDAE, Rod, profile=False)
 
 
 qs1 = q_rod1.reshape((t1.shape[0], -1, 7))
