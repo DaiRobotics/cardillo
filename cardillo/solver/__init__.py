@@ -6,7 +6,6 @@ from .solver_summary import SolverSummary
 
 # common solver functionality
 from ._base import consistent_initial_conditions, compute_I_F
-from ..utility.convergence_analysis import convergence_analysis
 
 # dynamic solvers
 from .scipy_ivp import ScipyIVP

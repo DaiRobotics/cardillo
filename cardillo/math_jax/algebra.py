@@ -1,8 +1,5 @@
-import jax
 import jax.numpy as jnp
 from jax import jit, vmap
-
-jax.config.update("jax_enable_x64", True)
 
 
 @jit
@@ -15,9 +12,9 @@ def norm(a: jnp.ndarray) -> float:
 def ax2skew(a: jnp.ndarray) -> jnp.ndarray:
     """Computes the skew symmetric matrix from a 3D vector."""
     # fmt: off
-    return jnp.array([[0,    -a[2], a[1] ],
-                      [a[2],  0,    -a[0]],
-                      [-a[1], a[0], 0    ]], dtype=jnp.float64)
+    return jnp.array([[0.0,    -a[2],  a[1] ],
+                      [a[2],   0.0,    -a[0]],
+                      [-a[1],  a[0],   0.0  ]], dtype=jnp.float64)
     # fmt: on
 
 
@@ -83,12 +80,11 @@ def skew2ax_A() -> jnp.ndarray:
     )
 
 
-# prefer jnp.cross if possible
-# @jit
-# def cross3(a: jnp.ndarray, b: jnp.ndarray) -> jnp.ndarray:
-#     """Vector product of two 3D vectors."""
-#     # fmt: off
-#     return jnp.array([a[1] * b[2] - a[2] * b[1], 
-#                       a[2] * b[0] - a[0] * b[2], 
-#                       a[0] * b[1] - a[1] * b[0]], dtype=jnp.float64)
-#     # fmt: on
+@jit
+def cross3(a: jnp.ndarray, b: jnp.ndarray) -> jnp.ndarray:
+    """Vector product of two 3D vectors."""
+    # fmt: off
+    return jnp.array([a[1] * b[2] - a[2] * b[1], 
+                      a[2] * b[0] - a[0] * b[2], 
+                      a[0] * b[1] - a[1] * b[0]], dtype=jnp.float64)
+    # fmt: on

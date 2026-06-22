@@ -48,42 +48,19 @@ class Solution:
     def save(self, filename):
         save_solution(self, filename)
 
+    def _get_value(self, key, idx):
+        r = self.__dict__[key]
+        if r is None:
+            return None
+        else:
+            try:
+                return r[idx]
+            except:
+                return r
+
     def __iter__(self):
-        return self.SolutionIterator(self)
+        keys = [k for k in self.__dict__ if k not in ["system", "solver_summary"]]
+        Result = namedtuple("Result", keys)
 
-    class SolutionIterator:
-        def __init__(self, solution) -> None:
-            self._solution = solution
-            self.keys = [*self._solution.__dict__.keys()]
-            # remove non-iterable keys
-            self.keys.remove("solver_summary")
-            self.keys.remove("system")
-
-            self._index = 0
-            self._retVal = namedtuple("Result", self.keys)
-
-        def __next__(self):
-            if self._index < len(self._solution.t):
-                try:
-                    result = self._retVal(
-                        *(
-                            (
-                                None
-                                if self._solution.__getattribute__(key) is None
-                                else (
-                                    self._solution.__getattribute__(key)[:, self._index]
-                                    if self._solution.__getattribute__(key).shape[0]
-                                    == 0
-                                    else self._solution.__getattribute__(key)[
-                                        self._index
-                                    ]
-                                )
-                            )
-                            for key in self.keys
-                        )
-                    )
-                except:
-                    RuntimeWarning("Solution iterator failed.")
-                self._index += 1
-                return result
-            raise StopIteration
+        for idx in range(len(self.t)):
+            yield Result(*(self._get_value(k, idx) for k in keys))

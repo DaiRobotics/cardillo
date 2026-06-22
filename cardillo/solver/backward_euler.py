@@ -9,6 +9,7 @@ from cardillo.math.approx_fprime import approx_fprime
 from cardillo.math.fsolve import fsolve
 from cardillo.math.prox import NegativeOrthant, estimate_prox_parameter
 from cardillo.solver import Solution, SolverOptions, SolverSummary
+from cardillo.utility.coo_matrix import CooMatrix
 
 
 class BackwardEuler:
@@ -111,10 +112,18 @@ class BackwardEuler:
             )
         )
 
+        self.M_coo = self.W_tau_coo = self.W_N_coo = self.W_F_coo = self.W_g_coo = (
+            self.W_gamma_coo
+        ) = self.W_c = None
+
+        self._J_x_coo = CooMatrix((self.nx, self.nx))
+        self._J_y_coo = CooMatrix((self.nx, self.ny))
+        self.g_x_coo = CooMatrix((self.ny, self.nq + self.nu))
+
         # initial mass matrix and force directions for prox-parameter estimation
-        self.M = system.M(self.tn, self.qn)
-        self.W_N = system.W_N(self.tn, self.qn)
-        self.W_F = system.W_F(self.tn, self.qn)
+        self.M_coo = system.M(self.tn, self.qn, format="Coo", coo=self.M_coo)
+        self.W_N_coo = system.W_N(self.tn, self.qn, format="Coo", coo=self.W_N_coo)
+        self.W_F_coo = system.W_F(self.tn, self.qn, format="Coo", coo=self.W_F_coo)
 
     def R_x(self, xn1, yn1):
         (
@@ -147,22 +156,28 @@ class BackwardEuler:
         ####################
         # equations of motion
         ####################
-        self.M = self.system.M(tn1, qn1, format="csr")
-        self.W_N = self.system.W_N(tn1, qn1, format="csr")
-        self.W_F = self.system.W_F(tn1, qn1, format="csr")
+        self.M_coo = self.system.M(tn1, qn1, format="Coo", coo=self.M_coo)
+        self.W_tau_coo = self.system.W_tau(tn1, qn1, format="Coo", coo=self.W_tau_coo)
+        self.W_g_coo = self.system.W_g(tn1, qn1, format="Coo", coo=self.W_g_coo)
+        self.W_gamma_coo = self.system.W_gamma(
+            tn1, qn1, format="Coo", coo=self.W_gamma_coo
+        )
+        self.W_c = self.system.W_c(tn1, qn1, format="Coo", coo=self.W_c)
+        self.W_N_coo = self.system.W_N(tn1, qn1, format="Coo", coo=self.W_N_coo)
+        self.W_F_coo = self.system.W_F(tn1, qn1, format="Coo", coo=self.W_F_coo)
         R_x[self.split_x[0] : self.split_x[1]] = (
-            self.M @ dun1
+            self.M_coo.tocsr(fix_size=True) @ dun1
             - dt
             * (
                 self.system.h(tn1, qn1, un1)
-                + self.system.W_tau(tn1, qn1, format="csr")
+                + self.W_tau_coo.tocsr(fix_size=True)
                 @ self.system.la_tau(tn1, qn1, un1)
             )
-            - self.system.W_g(tn1, qn1, format="csr") @ dP_gn1
-            - self.system.W_gamma(tn1, qn1, format="csr") @ dP_gamman1
-            - self.system.W_c(tn1, qn1, format="csr") @ dP_cn1
-            - self.W_N @ dP_Nn1
-            - self.W_F @ dP_Fn1
+            - self.W_g_coo.tocsr(fix_size=True) @ dP_gn1
+            - self.W_gamma_coo.tocsr(fix_size=True) @ dP_gamman1
+            - self.W_c.tocsr(fix_size=True) @ dP_cn1
+            - self.W_N_coo.tocsr(fix_size=True) @ dP_Nn1
+            - self.W_F_coo.tocsr(fix_size=True) @ dP_Fn1
         )
 
         #######################
@@ -199,37 +214,41 @@ class BackwardEuler:
         ####################
         # kinematic equation
         ####################
-        Rq_dot_q_dot = eye(self.nq) - dt * self.system.q_dot_q(tn1, qn1, un1)
-        Rq_dot_u_dot = -dt * self.system.q_dot_u(tn1, qn1)
+        Rq_dot_q_dot_part1 = -dt * self.system.q_dot_q(tn1, qn1, un1, format="Coo")
+        Rq_dot_u_dot = -dt * self.system.q_dot_u(tn1, qn1, format="Coo")
 
         ########################
         # equations of motion (1)
         ########################
-        M = self.system.M(tn1, qn1)
-        W_g = self.system.W_g(tn1, qn1)
-        W_gamma = self.system.W_gamma(tn1, qn1)
-        W_c = self.system.W_c(tn1, qn1)
+        M = self.system.M(tn1, qn1, format="Coo")
+        W_g = self.system.W_g(tn1, qn1, format="Coo")
+        W_gamma = self.system.W_gamma(tn1, qn1, format="Coo")
+        W_c = self.system.W_c(tn1, qn1, format="Coo")
 
         Ru_dot_q_dot = (
-            self.system.Mu_q(tn1, qn1, dun1)
+            self.system.Mu_q(tn1, qn1, dun1, format="Coo")
             - dt
-            * (self.system.h_q(tn1, qn1, un1) + self.system.Wla_tau_q(tn1, qn1, un1))
-            - self.system.Wla_g_q(tn1, qn1, dP_gn1)
-            - self.system.Wla_gamma_q(tn1, qn1, dP_gamman1)
-            - self.system.Wla_c_q(tn1, qn1, dP_cn1)
-            - self.system.Wla_N_q(tn1, qn1, dP_Nn1)
-            - self.system.Wla_F_q(tn1, qn1, dP_Fn1)
+            * (
+                self.system.h_q(tn1, qn1, un1, format="Coo")
+                + self.system.Wla_tau_q(tn1, qn1, un1, format="Coo")
+            )
+            - self.system.Wla_g_q(tn1, qn1, dP_gn1, format="Coo")
+            - self.system.Wla_gamma_q(tn1, qn1, dP_gamman1, format="Coo")
+            - self.system.Wla_c_q(tn1, qn1, dP_cn1, format="Coo")
+            - self.system.Wla_N_q(tn1, qn1, dP_Nn1, format="Coo")
+            - self.system.Wla_F_q(tn1, qn1, dP_Fn1, format="Coo")
         )
-        Ru_dot_u_dot = M - dt * (
-            self.system.h_u(tn1, qn1, un1) + self.system.Wla_tau_u(tn1, qn1, un1)
+        Ru_dot_u_dot_part1 = -dt * (
+            self.system.h_u(tn1, qn1, un1, format="Coo")
+            + self.system.Wla_tau_u(tn1, qn1, un1, format="Coo")
         )
 
         #######################
         # bilateral constraints
         #######################
-        Rla_g_q_dot = self.system.g_q(tn1, qn1)
-        Rla_gamma_q_dot = self.system.gamma_q(tn1, qn1, un1)
-        Rla_gamma_u_dot = self.system.gamma_u(tn1, qn1)
+        Rla_g_q_dot = self.system.g_q(tn1, qn1, format="Coo")
+        Rla_gamma_q_dot = self.system.gamma_q(tn1, qn1, un1, format="Coo")
+        Rla_gamma_u_dot = self.system.gamma_u(tn1, qn1, format="Coo")
 
         ############
         # compliance
@@ -238,30 +257,57 @@ class BackwardEuler:
         Rla_c_u_dot = self.system.c_u(tn1, qn1, un1, dP_cn1 / self.dt)
         Rla_c_la_c = self.system.c_la_c() / self.dt
 
+        s1, s2, s3, s4 = self.split_x
+        J_x = self._J_x_coo
+        J_x[11, :s1, :s1] = Rq_dot_q_dot_part1
+        J_x[111, :s1, :s1] = np.eye(self.nq)
+        J_x[12, :s1, s1:s2] = Rq_dot_u_dot
+
+        J_x[21, s1:s2, :s1] = Ru_dot_q_dot
+        J_x[22, s1:s2, s1:s2] = Ru_dot_u_dot_part1
+        J_x[222, s1:s2, s1:s2] = M
+        J_x[23, s1:s2, s2:s3] = -W_g
+        J_x[24, s1:s2, s3:s4] = -W_gamma
+        J_x[25, s1:s2, s4:] = -W_c
+
+        J_x[31, s2:s3, :s1] = Rla_g_q_dot
+
+        J_x[41, s3:s4, :s1] = Rla_gamma_q_dot
+        J_x[42, s3:s4, s1:s2] = Rla_gamma_u_dot
+
+        J_x[51, s4:, :s1] = Rla_c_q_dot
+        J_x[52, s4:, s1:s2] = Rla_c_u_dot
+        J_x[55, s4:, s4:] = Rla_c_la_c
+
         # fmt: off
-        J = bmat(
-            [
-                [   Rq_dot_q_dot,    Rq_dot_u_dot, None,     None,       None],
-                [   Ru_dot_q_dot,    Ru_dot_u_dot, -W_g, -W_gamma,       -W_c],
-                [    Rla_g_q_dot,            None, None,     None,       None],
-                [Rla_gamma_q_dot, Rla_gamma_u_dot, None,     None,       None],
-                [    Rla_c_q_dot,     Rla_c_u_dot, None,     None, Rla_c_la_c],
-            ],
-            format="csc",
-        )
+        # J = bmat(
+        #     [
+        #         [   Rq_dot_q_dot,    Rq_dot_u_dot, None,     None,       None],
+        #         [   Ru_dot_q_dot,    Ru_dot_u_dot, -W_g, -W_gamma,       -W_c],
+        #         [    Rla_g_q_dot,            None, None,     None,       None],
+        #         [Rla_gamma_q_dot, Rla_gamma_u_dot, None,     None,       None],
+        #         [    Rla_c_q_dot,     Rla_c_u_dot, None,     None, Rla_c_la_c],
+        #     ],
+        #     format="csc",
+        # )
         # fmt: on
-        return J
+        return J_x.tocsc(fix_size=True)
 
     def J_y(self, xn1, yn1):
-        # fmt: off
-        return bmat([
-            [       coo_array((self.nq, self.nla_N)),      None],
-            [                              -self.W_N, -self.W_F],
-            [    coo_array((self.nla_g, self.nla_N)),      None],
-            [coo_array((self.nla_gamma, self.nla_N)),      None],
-            [    coo_array((self.nla_c, self.nla_N)),      None],
-        ])
-        # fmt: on
+        s1, s2 = self.split_x[:2]
+        J_y = self._J_y_coo
+        J_y[s1:s2, : self.nla_N] = -self.W_N_coo
+        J_y[s1:s2, self.nla_N :] = -self.W_F_coo
+        # # fmt: off
+        # return bmat([
+        #     [       coo_array((self.nq, self.nla_N)),      None],
+        #     [                              -self.W_N, -self.W_F],
+        #     [    coo_array((self.nla_g, self.nla_N)),      None],
+        #     [coo_array((self.nla_gamma, self.nla_N)),      None],
+        #     [    coo_array((self.nla_c, self.nla_N)),      None],
+        # ])
+        # # fmt: on
+        return J_y
 
     def prox(self, x1, y0):
         (
@@ -379,16 +425,23 @@ class BackwardEuler:
             #     [self.nla_N],
             # )
 
-            A = -lu.solve(self.J_y(self.xn, self.yn).toarray())
-            # fmt: off
-            g_x = bmat([
-                [             self.system.g_N_q(self.tn, self.qn),       None],
-                [self.system.gamma_F_q(self.tn, self.qn, self.un), self.W_F.T],
-            ])
-            # fmt: on
-            prox_r = self.options.prox_scaling / np.abs(g_x @ A[: self.split_x[1]]).sum(
-                axis=1
+            A = -lu.solve(self.J_y(self.xn, self.yn).toarray(fix_size=True))
+
+            g_x_coo = self.g_x_coo
+            g_x_coo[0, : self.nla_N, : self.nq] = self.system.g_N_q(self.tn, self.qn)
+            g_x_coo[1, self.nla_N :, : self.nq] = self.system.gamma_F_q(
+                self.tn, self.qn, self.un
             )
+            g_x_coo[2, self.nla_N :, self.nq :] = self.W_F_coo.T
+            # fmt: off
+            # g_x = bmat([
+            #     [             self.system.g_N_q(self.tn, self.qn),       None],
+            #     [self.system.gamma_F_q(self.tn, self.qn, self.un), self.W_F_coo.tocsr(fix_size=True).T],
+            # ])
+            # fmt: on
+            prox_r = self.options.prox_scaling / np.abs(
+                g_x_coo.tocsr(fix_size=True) @ A[: self.split_x[1]]
+            ).sum(axis=1)
             self.prox_r_N, self.prox_r_F = np.array_split(prox_r, self.split_y)
             self.prox_r_N *= self.dt
 
@@ -485,7 +538,8 @@ class BackwardEuler:
 
             # update progress bar
             pbar.set_description(
-                f"t: {tn1:0.2e}s < {self.t1:0.2e}s; |y1 - y0|_rel: {error:0.2e}; fixed-point: {i_fixed_point}/{self.options.fixed_point_max_iter}; |dx|_rel: {sol.error:0.2e}; newton: {sol.nit}/{self.options.newton_max_iter}"
+                f"t: {tn1:0.2e}s < {self.t1:0.2e}s; |y1 - y0|_rel: {error:0.2e}; fixed-point: {i_fixed_point}/{self.options.fixed_point_max_iter}; |dx|_rel: {sol.error:0.2e}; newton: {sol.nit}/{self.options.newton_max_iter}",
+                refresh=False,
             )
 
             # compute state

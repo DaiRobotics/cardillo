@@ -1,11 +1,16 @@
 import numpy as np
 
 from cardillo.constraints import RigidConnection
-from cardillo.forces import Force, TendonForce
+from cardillo.forces import Force
 from cardillo.rods.force_line_distributed import Force_line_distributed
 
-from cardillo.rods import CircularCrossSection, CrossSectionInertias, Simo1986
-from cardillo.rods.discreteRod import DiscreteRod
+from cardillo.rods import (
+    CircularCrossSection,
+    CrossSectionInertias,
+    Simo1986,
+    DiscreteRod,
+    RodTendonForce,
+)
 
 from cardillo.solver import Newton
 from cardillo.system import System
@@ -100,7 +105,8 @@ if __name__ == "__main__":
     # ---- tendons ----
     B_r_CP_lists = [
         [
-            np.array([tendon_hole_r * np.cos(phi), tendon_hole_r * np.sin(phi), 0]),
+            rod_A_IB0.T
+            @ np.array([tendon_hole_r * np.cos(phi), tendon_hole_r * np.sin(phi), 0]),
             rod_A_IB0.T
             @ np.array(
                 [
@@ -114,11 +120,10 @@ if __name__ == "__main__":
     ]
     tendons = []
     for B_r_CP_list in B_r_CP_lists:
-        tendon = TendonForce(
-            subsystem_list=[system.origin, rod],
-            connectivity=[(0, 1)],
-            xi_list=[None, 1],
-            B_r_CP_list=B_r_CP_list,
+        tendon = RodTendonForce(
+            rod,
+            [0, 1],
+            B_r_CPs=B_r_CP_list,
         )
         tendons.append(tendon)
     tendons[0].la = lambda t: t * 50

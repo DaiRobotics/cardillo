@@ -15,11 +15,7 @@ from cardillo import math_jax
 class _VisualTwinBase(ABC):
     def __init__(self, contr, xi=None):
         self.xi = xi
-        if hasattr(contr, "get_marker") and xi is not None:
-            mk = contr.get_marker(xi)
-            self.contr = mk
-        else:
-            self.contr = contr
+        self.contr = contr
         self.actors = []
         if not hasattr(contr, "visual_twins"):
             contr.visual_twins = [self]
@@ -152,7 +148,7 @@ class VisualDiscreteRod(_VisualTwinBase):
         q_rod = sol_i.q[rod.qDOF]
         q_nodes = rod._view_nodal_q(q_rod)
         r_OC_nodes = q_nodes[:, :3]
-        A_IB_nodes = np.asarray(math_jax.Exp_SO3_quat_batch(q_nodes[:, 3:], True))
+        A_IB_nodes = math_jax.Exp_SO3_quat_norm_batch(q_nodes[:, 3:]).__array__()
         control_pts = r_OC_nodes[:, None] + (A_IB_nodes @ self.control_pts).swapaxes(
             1, 2
         )
@@ -162,7 +158,7 @@ class VisualDiscreteRod(_VisualTwinBase):
         self._ugrid.Modified()
 
         # set stress
-        _, B_gamma, B_kappa = rod._eval_els(q_rod)
+        _, B_gamma, B_kappa = rod._eval(q_rod)
         self._strain[:, :3] = B_gamma
         self._strain[:, 3:] = B_kappa
 
@@ -213,14 +209,11 @@ class _VisualvtkSource(_VisualTwinBase):
         self.actors.append(actor)
 
     def update_visual_state(self, sol_i):
+        contr = self.contr
         t, q = sol_i.t, sol_i.q[self.contr.qDOF]
         xi = self.xi
-        if isinstance(self.contr, CosseratRod_PetrovGalerkin):
-            qe = q[self.contr.local_qDOF_P(xi)]
-            r_OP, A_IB, _, _ = self.contr._eval(qe, xi, self.N, self.N_xi)
-        else:
-            A_IB = self.contr.A_IB(t, q, xi)
-            r_OP = self.contr.r_OP(t, q, xi)
+        A_IB = contr.A_IB(t, q[contr.local_qDOF_P(xi)], xi)
+        r_OP = contr.r_OP(t, q[contr.local_qDOF_P(xi)], xi)
         for i in range(3):
             for j in range(3):
                 self.H_IB.SetElement(i, j, A_IB[i, j])
@@ -324,14 +317,11 @@ class VisualArUco(_VisualTwinBase):
             # subsystem.appendfilter.AddInputConnection(filter.GetOutputPort())
 
     def update_visual_state(self, sol_i):
+        contr = self.contr
         t, q = sol_i.t, sol_i.q[self.contr.qDOF]
         xi = self.xi
-        if isinstance(self.contr, CosseratRod_PetrovGalerkin):
-            qe = q[self.contr.local_qDOF_P(xi)]
-            r_OP, A_IB, _, _ = self.contr._eval(qe, xi, self.N, self.N_xi)
-        else:
-            A_IB = self.contr.A_IB(t, q, xi)
-            r_OP = self.contr.r_OP(t, q, xi)
+        A_IB = contr.A_IB(t, q[contr.local_qDOF_P(xi)], xi)
+        r_OP = contr.r_OP(t, q[contr.local_qDOF_P(xi)], xi)
         for i in range(3):
             for j in range(3):
                 self.H_IB.SetElement(i, j, A_IB[i, j])
@@ -407,14 +397,12 @@ class VisualCoordSystem(_VisualvtkSource):
 
 
 class VisualTendon(_VisualTwinBase):
-    def __init__(
-        self, tendon: nPointInteraction, radius=1e-3, color=(255, 255, 255), opacity=1
-    ):
+    def __init__(self, tendon, radius=1e-3, color=(255, 255, 255), opacity=1):
         super().__init__(tendon)
         poly_data = vtk.vtkPolyData()
         # points
         npts = 2
-        ncon = len(self.contr.connectivity)
+        ncon = self.contr.n_vert
         self.vtkpoints = vtk.vtkPoints()
         self.vtkpoints.SetNumberOfPoints(npts * ncon)
         poly_data.SetPoints(self.vtkpoints)
@@ -447,11 +435,13 @@ class VisualTendon(_VisualTwinBase):
         self.actors.append(actor)
 
     def update_visual_state(self, sol_i):
-        t, q = sol_i.t, sol_i.q[self.contr.qDOF]
+        tendon = self.contr
+        t, q = sol_i.t, sol_i.q[tendon.qDOF]
         points = []
-        for j, k in self.contr.connectivity:
-            points.append(self.contr.r_OPk(t, q, j))
-            points.append(self.contr.r_OPk(t, q, k))
+        r_OPk = tendon.r_OP_vert(q)
+        for k in range(tendon.n_vert - 1):
+            points.append(r_OPk[k])
+            points.append(r_OPk[k + 1])
         for i, p in enumerate(points):
             self.vtkpoints.SetPoint(i, p)
         self.vtkpoints.Modified()
@@ -499,11 +489,6 @@ class Plotter:
             if hasattr(contr, "visual_twins"):
                 for twin in contr.visual_twins:
                     self.__add_visual_twin(twin)
-            if hasattr(contr, "_markers"):
-                for marker in contr._markers.values():
-                    if hasattr(marker, "visual_twins"):
-                        for twin in marker.visual_twins:
-                            self.__add_visual_twin(twin)
 
         self.__window_open = False
 

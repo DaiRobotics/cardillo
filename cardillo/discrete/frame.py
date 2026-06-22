@@ -116,7 +116,7 @@ class Frame:
     def B_Omega_q(self, t, q=None, u=None, xi=None):
         return np.empty((3, 0))
 
-    def B_J_R(self, t, q, xi=None):
+    def B_J_R(self, t, q=None, xi=None):
         return np.empty((3, 0))
 
     def B_J_R_q(self, t, q=None, xi=None):

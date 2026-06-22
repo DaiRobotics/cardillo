@@ -12,7 +12,7 @@ from cardillo.rods.force_line_distributed import Force_line_distributed
 
 from cardillo.system import System
 
-from cardillo.rods.discreteRod import DiscreteRod
+from cardillo.rods import DiscreteRod
 
 import cProfile
 
@@ -75,9 +75,10 @@ def cantilever_beam(Rod, profile=False):
     system.assemble()
 
     t1 = 3
-    rtol = 1e-3
-    atol = 1e-6
-    solver = ScipyDAE(system, t1, t1 / 1000, rtol=rtol, atol=atol)
+    # rtol = 1e-3
+    # atol = 1e-6
+    # solver = ScipyDAE(system, t1, t1 / 1000, rtol=rtol, atol=atol)
+    solver = BackwardEuler(system, t1, 1e-2)
 
     if profile:
         solver.fun(0.0, solver.y0, solver.y0)
@@ -116,8 +117,8 @@ for n in np.arange(nelement + 1)[:: nelement // int(nelement / 5)]:
     plt.plot(t1, qs2[:, n, 0], "-")
     plt.grid()
     plt.subplot(4, 1, 2)
-    plt.plot(t1, qs1[:, n, 1], "--.")
-    plt.plot(t1, qs2[:, n, 1], "-")
+    plt.plot(t1, qs1[:, n, 2], "--.")
+    plt.plot(t1, qs2[:, n, 2], "-")
     plt.grid()
     plt.subplot(4, 1, 3)
     plt.plot(t1, qs1[:, n, 0] - qs2[:, n, 0], "-r")

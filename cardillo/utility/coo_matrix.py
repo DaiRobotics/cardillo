@@ -51,7 +51,6 @@ class CooMatrix:
 
         self._data_index = {}
         self._value_type = {}
-        self._scipy_coo = None
 
     @property
     def not_empty(self):
@@ -163,7 +162,7 @@ class CooMatrix:
         )
         self[DOF[0], DOF[1]] = matrix
 
-    def asformat(self, format, copy=False):
+    def asformat(self, format, copy=False, fix_size=False):
         """Return this matrix in the passed format.
         Parameters
         ----------
@@ -185,11 +184,11 @@ class CooMatrix:
 
         # Forward the copy kwarg, if it's accepted.
         try:
-            return convert_method(copy=copy)
+            return convert_method(copy=copy, fix_size=fix_size)
         except TypeError:
             return convert_method()
 
-    def tosparse(self, scipy_matrix, copy=False):
+    def __tosparse(self, scipy_matrix, copy=False):
         """Convert container to scipy sparse matrix.
 
         Parameters
@@ -201,28 +200,62 @@ class CooMatrix:
             (self.data, (self.row, self.col)), shape=self.shape, copy=copy
         )
 
-    def tocoo(self, copy=False):
+    def tocoo(self, copy=False, fix_size=False):
         """Convert container to scipy coo_array."""
-        if copy:
-            coo = self.tosparse(coo_array, copy=True)
-        elif self._scipy_coo is None:
-            coo = self.tosparse(coo_array, copy=False)
-            self._scipy_coo = coo
+        if fix_size:
+            try:
+                coo = self._coo_cached
+                if copy:
+                    coo.data = self.data.copy()
+                else:
+                    coo.data = self.data
+            except AttributeError:
+                coo = self._coo_cached = self.__tosparse(coo_array, copy=False)
         else:
-            coo = self._scipy_coo
+            coo = self.__tosparse(coo_array, copy=copy)
         return coo
 
-    def tocsc(self, copy=False):
+    def tocsc(self, copy=False, fix_size=False):
         """Convert container to scipy csc_array."""
-        return self.tosparse(csc_array, copy=copy)
+        if fix_size:
+            try:
+                csc = self._csc_cached
+                try:
+                    inverse = self.__csc_inverse
+                except AttributeError:
+                    nrow = self.shape[0]
+                    index = self.col * nrow + self.row
+                    _, inverse = np.unique(index, return_inverse=True)
+                    self.__csc_inverse = inverse
+                csc.data = np.bincount(inverse, weights=self.data)
+            except AttributeError:
+                csc = self._csc_cached = self.__tosparse(csc_array, copy=False)
+        else:
+            csc = self.__tosparse(csc_array, copy=copy)
+        return csc
 
-    def tocsr(self, copy=False):
+    def tocsr(self, copy=False, fix_size=False):
         """Convert container to scipy csr_array."""
-        return self.tosparse(csr_array, copy=copy)
+        if fix_size:
+            try:
+                csr = self._csr_cached
+                try:
+                    inverse = self.__csr_inverse
+                except AttributeError:
+                    ncol = self.shape[1]
+                    index = self.row * ncol + self.col
+                    _, inverse = np.unique(index, return_inverse=True)
+                    self.__csr_inverse = inverse
+                csr.data = np.bincount(inverse, weights=self.data)
+            except AttributeError:
+                csr = self._csr_cached = self.__tosparse(csr_array, copy=False)
+        else:
+            csr = self.__tosparse(csr_array, copy=copy)
+        return csr
 
-    def toarray(self, copy=False):
+    def toarray(self, copy=False, fix_size=False):
         """Convert container to 2D numpy array."""
-        return self.tocoo(copy).toarray()
+        return self.tocoo(copy, fix_size=fix_size).toarray()
 
     def transpose(self, copy=False, coo=None):
         if coo is None:
@@ -250,6 +283,39 @@ class CooMatrix:
         ret.data = -self.data
         return ret
 
+    def __add__(self, other):
+        ret = CooMatrix(self.shape)
+        if isinstance(other, CooMatrix):
+            ret.data = np.concatenate([self.data, other.data])
+            ret.col = np.concatenate([self.col, other.col])
+            ret.row = np.concatenate([self.row, other.row])
+            return ret
+        else:
+            return NotImplementedError
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __sub__(self, other):
+        if isinstance(other, CooMatrix):
+            ret = CooMatrix(self.shape)
+            ret.data = np.concatenate([self.data, -other.data])
+            ret.col = np.concatenate([self.col, other.col])
+            ret.row = np.concatenate([self.row, other.row])
+            return ret
+        else:
+            return NotImplementedError
+
+    def __rsub__(self, other):
+        if isinstance(other, CooMatrix):
+            ret = CooMatrix(self.shape)
+            ret.data = np.concatenate([-self.data, other.data])
+            ret.col = np.concatenate([self.col, other.col])
+            ret.row = np.concatenate([self.row, other.row])
+            return ret
+        else:
+            return NotImplementedError
+
     def __mul__(self, other):
         ret = CooMatrix(self.shape)
         ret.row = self.row.copy()
@@ -257,76 +323,8 @@ class CooMatrix:
         if isinstance(other, (int, float)):
             ret.data = self.data * other
         else:
-            return NotImplemented
+            return NotImplementedError
         return ret
 
     def __rmul__(self, other):
         return self.__mul__(other)
-
-
-if __name__ == "__main__":
-    from profilehooks import profile
-    import numpy as np
-    from scipy.sparse import random
-
-    entries = 1
-    density = 1
-    local_size = 10
-    nlocal = 100
-
-    @profile(entries=entries)
-    def run_dense_matrix():
-        global_size = nlocal * local_size
-        coo = CooMatrix((global_size, global_size))
-
-        for i in range(nlocal):
-            dense = np.random.rand(local_size, local_size)
-            idx = np.arange(i * local_size, (i + 1) * local_size)
-            coo[idx, idx] = dense
-
-        return coo.tocsr()
-
-    @profile(entries=entries)
-    def run_dense_vector():
-        global_size = nlocal * local_size
-        coo = CooMatrix((global_size, global_size))
-
-        for i in range(nlocal):
-            dense = np.random.rand(local_size)
-            idx = np.arange(i * local_size, (i + 1) * local_size)
-            coo[idx, idx] = dense
-
-        return coo.tocsr()
-
-    @profile(entries=entries)
-    def run_scipy_sparse():
-        global_size = nlocal * local_size
-        coo = CooMatrix((global_size, global_size))
-
-        for i in range(nlocal):
-            dense = random(local_size, local_size, density=density)
-            idx = np.arange(i * local_size, (i + 1) * local_size)
-            coo[idx, idx] = dense
-
-        return coo.tocsr()
-
-    @profile(entries=entries)
-    def run_coo_sparse():
-        global_size = nlocal * local_size
-        coo = CooMatrix((global_size, global_size))
-
-        for i in range(nlocal):
-            dense = random(local_size, local_size, density=density)
-            dense_coo = CooMatrix((local_size, local_size))
-            dense_coo.data = array("d", dense.data)
-            dense_coo.row = array("I", dense.row)
-            dense_coo.col = array("I", dense.col)
-            idx = np.arange(i * local_size, (i + 1) * local_size)
-            coo[idx, idx] = dense_coo
-
-        return coo.tocsr()
-
-    run_dense_matrix()
-    run_dense_vector()
-    run_scipy_sparse()
-    run_coo_sparse()

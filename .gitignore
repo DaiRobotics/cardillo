@@ -43,6 +43,7 @@ jupyter_execute/
 .mypy_cache
 
 # vtk files
+vtk
 *.vtk
 *.vtu
 *.pvd
@@ -56,3 +57,6 @@ myvenv
 
 # profiling results
 *.prof
+
+# MacOS
+.DS_Store

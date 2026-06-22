@@ -2,8 +2,8 @@ from time import perf_counter
 import vtk
 from vtk import vtkDataSetMapper, vtkActor, vtkGeometryFilter
 from cardillo.solver import Solution
+from cardillo.rods._base_export import RodExportBase
 from .vtk_export import make_ugrid
-from ..rods._base_export import RodExportBase
 
 
 class Renderer:
