@@ -40,7 +40,7 @@ def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps=10
         # print("====force")
         # lambda_t = np.asarray([2.739, 2.524, 0.173, 1.647]) * 1
         
-        lambda_t_table.append(lambda_t)
+        # lambda_t_table.append(lambda_t)
         
         sol, x, solver = static_model.apply_forces(
             lambda_t, verbose=False, force_steps=force_steps, warm_start=True
@@ -106,7 +106,7 @@ def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps=10
         )
         e_n_prev = e_n
         k += 1
-    return lambda_t, q_guess, Gamma, lambda_t_table
+    return lambda_t, q_guess, Gamma
 
 
 def solve_config(static_model, lambda_t, force_steps=10, q_warm=None):
