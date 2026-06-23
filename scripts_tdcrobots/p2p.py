@@ -26,11 +26,25 @@ def r_OP_ref_fn(t):
     k = min(int(t / hold_t), len(sequence) - 1)
     # return SETPOINT_TABLE["E2"]
     return SETPOINT_TABLE[sequence[k]]
-
+la_tA_table = []
+la_tB_table = []
+la_tC_table = []
+la_tD_table = []
+la_tE_table = []
 for name in sequence:
     r_OP_ref = SETPOINT_TABLE[name]
     # la_ref, _, _ = solve_ref_config(r_OP_ref, la_t0, tol = 3e-4, force_steps=20)
-    la_t_ref, q0, Gamma0 = solve_ref_config(r_OP_ref, la_t0, force_steps=20)
+    la_t_ref, q0, Gamma0, lambda_t_table = solve_ref_config(r_OP_ref, la_t0, force_steps=20)
+    if name == "A":
+        la_tA_table = lambda_t_table
+    elif name == "B":
+        la_tB_table = lambda_t_table
+    elif name == "C":
+        la_tC_table = lambda_t_table
+    elif name == "D":
+        la_tD_table = lambda_t_table
+    else:
+        la_tE_table = lambda_t_table    
     la_t_ref_table.append(la_t_ref)
     q0_table.append(q0)
     Gamma0_table.append(Gamma0)
@@ -40,6 +54,19 @@ def la_t_ref_fn(t):
         return la_t_ref_table[-1]
     k = min(int(t / hold_t), len(sequence) - 1)
     return la_t_ref_table[k]
+
+# CSV 
+import csv
+from itertools import zip_longest
+
+
+csv_path = r"C:\Users\tongd\OneDrive\Documents\Uni\HIWI_INM\cardillo\BA_Repo\scripts_tdcrobots\p2p_la_t.csv"
+with open(csv_path, "w", newline="") as csvfile:
+    writer = csv.writer(csvfile)
+    writer.writerow(["la_tA", "la_tB", "la_tC", "la_tD", "la_tE"])
+    for row in zip_longest(la_tA_table, la_tB_table, la_tC_table, la_tD_table, la_tE_table, fillvalue=""):
+        writer.writerow(row)
+exit()
 
 ## Run Simulation
 

@@ -29,7 +29,7 @@ G_ACCEL = 9.81
 
 def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps=10):
     static_model = StaticModel()
-
+    lambda_t_table = []
     lambda_t = np.clip(np.array(lambda_t0, float), lambda_t_min, lambda_t_max)
     e_n_prev = np.inf
     stall = 0
@@ -39,8 +39,11 @@ def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps=10
         # ======= solve static equilibrium =======
         # print("====force")
         # lambda_t = np.asarray([2.739, 2.524, 0.173, 1.647]) * 1
+        
+        lambda_t_table.append(lambda_t)
+        
         sol, x, solver = static_model.apply_forces(
-            lambda_t, verbose=False, force_steps=force_steps, warm_start=False
+            lambda_t, verbose=False, force_steps=force_steps, warm_start=True
         )
 
         # value evaluation
@@ -103,7 +106,7 @@ def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps=10
         )
         e_n_prev = e_n
         k += 1
-    return lambda_t, q_guess, Gamma
+    return lambda_t, q_guess, Gamma, lambda_t_table
 
 
 def solve_config(static_model, lambda_t, force_steps=10, q_warm=None):
@@ -502,25 +505,25 @@ class DynamicModel(CommonModel):
             t1=t_sim,
             dt=1e-2,
         )
-
+        # self.solver = ScipyDAE(self.system, t1=t_sim, dt=1e-2)
 
 # # sol = static_model.apply_forces([1, 0, 0, 0], force_steps=30)
 
 # # sol = static_model.apply_forces([10, 0, 0, 0], eval_keys=["sol"], force_steps=10)
 
 # # ----- controller parameters -----
-# lambda_t_min = 0.0
-# lambda_t_max = 50.0
-# la_t0 = np.array([1, 1, 1, 1]) * 0.0
+lambda_t_min = 0.0
+lambda_t_max = 50.0
+la_t0 = np.array([1, 1, 1, 1]) * 0.0
 
 # # ---- reference trajectories ----
 
 # traj_mode = "p2p" # "p2p", "circle_zy", "circle_xy", "star_yz"
 # t_scale = 1.0 # time scaling if needed
 
-# def paper_to_cardillo(u):
-#     X, Y, Z = u
-#     return np.array([Y, Z, X])
+def paper_to_cardillo(u):
+    X, Y, Z = u
+    return np.array([Y, Z, X])
 
 # def make_circle(x_fn, y_fn, z_fn, t_period):
 #     def ref(t):
