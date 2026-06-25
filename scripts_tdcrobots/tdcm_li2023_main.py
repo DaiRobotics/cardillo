@@ -27,8 +27,7 @@ from scipy.sparse.linalg import splu
 G_ACCEL = 9.81
 
 
-def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps=10):
-    static_model = StaticModel()
+def solve_ref_config(static_model, r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps=10):
 
     lambda_t = np.clip(np.array(lambda_t0, float), lambda_t_min, lambda_t_max)
     e_n_prev = np.inf
@@ -40,7 +39,7 @@ def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps=10
         # print("====force")
         # lambda_t = np.asarray([2.739, 2.524, 0.173, 1.647]) * 1
         sol, x, solver = static_model.apply_forces(
-            lambda_t, verbose=False, force_steps=force_steps, warm_start=False
+            lambda_t, verbose=False, force_steps=force_steps, warm_start=True
         )
 
         # value evaluation
@@ -155,7 +154,7 @@ class TendonForceControl:
         self,
         Kp,
         Gamma,
-        r_OP_traj,
+        r_OP_ref,
         la_t_ref,
         rod,
         tendons: list[RodTendonForce],
@@ -170,7 +169,7 @@ class TendonForceControl:
         self.Gamma_inv = Gamma.T @ np.linalg.solve(
             Gamma @ Gamma.T, np.eye(Gamma.shape[0])
         )
-        self.r_OP_traj = r_OP_traj
+        self.r_OP_ref = r_OP_ref
         self.la_t_ref = la_t_ref
         self.rod = rod
         self.tendons = tendons
@@ -182,7 +181,6 @@ class TendonForceControl:
         self.last_gamma_check_t = -np.inf
 
         self.tau_ff = tau_ff
-        self.la_t_ff = None
         self.t_prev = None
 
         self.nq = len(tendons)
@@ -195,18 +193,12 @@ class TendonForceControl:
         self.uDOF = self.rod.uDOF
 
     def step_callback(self, t, q, u):
+        return q, u
         # Gamma = self.Gamma(t)
         # Ramp on feed forward (the bigger tau.ff, the slower the ramp)
         la_t_ref_target = self.la_t_ref(t)
-        if self.la_t_ff is None:
-            self.la_t_ff = np.array(la_t_ref_target, dtype=float)
-        else:
-            dt = t - self.t_prev
-            # alpha = min(dt / self.tau_ff, 1.0) if dt > 0 else 0.0
-            alpha = 0
-            self.la_t_ff = self.la_t_ff + alpha * (la_t_ref_target - self.la_t_ff)
         self.t_prev = t
-        r_OP_ref = self.r_OP_traj(t)
+        r_OP_ref = self.r_OP_ref(t)
 
         # Recompute gamma
         if (
@@ -236,9 +228,12 @@ class TendonForceControl:
         self._la_t_dot = self.Kp * self.Gamma_inv @ delta_r_OP
         # self._la_t_dot = self.Kp * pinv(self.Gamma) @ delta_r_OP
         # self._la_t_dot = self.Kp * self.Gamma.T @ np.linalg.solve(self.Gamma @ self.Gamma.T, delta_r_OP)
-        for i, (td, delta_la) in enumerate(zip(self.tendons, q[: self._nq1])):
+        la_t_fb = q[: self._nq1]
+        la_t = la_t_fb + self.la_t_ref(t)
+        for td, la_t_i in zip(self.tendons, la_t):
             # td.set_force(lambda t, la=delta_la + la_t_ref[i]: la)
-            td.set_force(lambda t, la=delta_la + self.la_t_ff[i]: la)
+            td.set_force(lambda t, la=la_t_i: la)
+            
             # td.set_force(lambda t, la=delta_la + la_t_ref_table[-1][i]: la)
             # td.set_force(lambda t, la=delta_la: la)
         return q, u
@@ -463,15 +458,16 @@ class StaticModel(CommonModel):
 
 
 class DynamicModel(CommonModel):
-    def __init__(self, t_sim, Kp, Gamma, la_t0, r_OP_traj, q0=None):
+    def __init__(self, t_sim, Kp, Gamma, la_t0, r_OP_ref, la_t_ref, q0=None):
         super().__init__()
         self.controller = TendonForceControl(
             Kp,
             Gamma,
-            r_OP_traj,
+            r_OP_ref,
+            la_t_ref,
             self.rod,
             self.tendons,
-            static_model=None,
+            static_model=StaticModel(),
             gamma_eps=1.0,
             gamma_check_dt=1.0,
         )
@@ -508,19 +504,19 @@ class DynamicModel(CommonModel):
 
 # # sol = static_model.apply_forces([10, 0, 0, 0], eval_keys=["sol"], force_steps=10)
 
-# # ----- controller parameters -----
-# lambda_t_min = 0.0
-# lambda_t_max = 50.0
-# la_t0 = np.array([1, 1, 1, 1]) * 0.0
+# ----- controller parameters -----
+lambda_t_min = 0.0
+lambda_t_max = 50.0
+la_t0 = np.array([1, 1, 1, 1]) * 0.0
 
 # # ---- reference trajectories ----
 
 # traj_mode = "p2p" # "p2p", "circle_zy", "circle_xy", "star_yz"
 # t_scale = 1.0 # time scaling if needed
 
-# def paper_to_cardillo(u):
-#     X, Y, Z = u
-#     return np.array([Y, Z, X])
+def paper_to_cardillo(u):
+    X, Y, Z = u
+    return np.array([Y, Z, X])
 
 # def make_circle(x_fn, y_fn, z_fn, t_period):
 #     def ref(t):
