@@ -6,7 +6,13 @@ from cardillo.constraints import RigidConnection
 from cardillo.forces import Force
 from cardillo.rods.force_line_distributed import Force_line_distributed
 
-from cardillo.rods import CircularCrossSection, CrossSectionInertias, Simo1986, DiscreteRod, RodTendonForce
+from cardillo.rods import (
+    CircularCrossSection,
+    CrossSectionInertias,
+    Simo1986,
+    DiscreteRod,
+    RodTendonForce,
+)
 
 from cardillo.solver import ScipyDAE, BackwardEuler, Newton, SolverOptions, Solution
 from cardillo.system import System
@@ -18,11 +24,11 @@ from scipy.linalg import pinv
 from scipy.sparse.linalg import splu
 
 
-def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps = 10):
+def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps=10):
     static_model = StaticModel()
     lambda_t_table = []
     lambda_t = np.clip(np.array(lambda_t0, float), lambda_t_min, lambda_t_max)
-    
+
     e_n_prev = np.inf
     stall = 0
     k = 0
@@ -33,8 +39,10 @@ def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps = 
         # lambda_t = np.asarray([2.739, 2.524, 0.173, 1.647]) * 1
         lambda_t_table.append(lambda_t)
 
-        sol, x, solver = static_model.apply_forces(lambda_t, verbose=False, force_steps=force_steps, warm_start=False)
-        
+        sol, x, solver = static_model.apply_forces(
+            lambda_t, verbose=False, force_steps=force_steps, warm_start=False
+        )
+
         # value evaluation
         rod = static_model.rod
         system = static_model.system
@@ -58,7 +66,7 @@ def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps = 
         rhs = np.zeros((solver.nx, n_tendons))
         rhs[:nu, :] = W_t
 
-        dx = splu(J).solve(-rhs)   # dx_dT, shape (nx, n_tendons)
+        dx = splu(J).solve(-rhs)  # dx_dT, shape (nx, n_tendons)
         pos_idx = rod.qDOF[rod.nodalDOF_r[rod.nnode - 1]]
         Gamma = dx[pos_idx, :]
 
@@ -73,7 +81,7 @@ def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps = 
         if e_n - e_n_prev > 0 and e_n < 3e-4:
             break
         # if e_n_prev - e_n < 1e-7:  # converged to the best reachable point
-            
+
         # # if e_n_prev - e_n < 1e-4:  # converged to the best reachable point
 
         #     stall += 1
@@ -85,25 +93,36 @@ def solve_ref_config(r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps = 
         # damped (Levenberg-style) least-squares step, with a per-step limiter
         # TODO: check the implementation of Tianxiang Multibody Paper
         dlambda_t = Gamma.T @ np.linalg.solve(Gamma @ Gamma.T + damping * np.eye(3), e)
-        dlambda_t = np.clip(dlambda_t, -0.5, 0.5)  # small steps: stay in the uncrushed workspace
+        dlambda_t = np.clip(
+            dlambda_t, -0.5, 0.5
+        )  # small steps: stay in the uncrushed workspace
         lambda_t = np.clip(lambda_t + dlambda_t, lambda_t_min, lambda_t_max)
-        print(f"  inv-statics it {k:2d}: |tip-target|={e_n*1e3:7.3f} mm, "
-        f"lambda_t={np.round(lambda_t, 3)}, cond(Gamma)={np.linalg.cond(Gamma):.2e}")
+        print(
+            f"  inv-statics it {k:2d}: |tip-target|={e_n*1e3:7.3f} mm, "
+            f"lambda_t={np.round(lambda_t, 3)}, cond(Gamma)={np.linalg.cond(Gamma):.2e}"
+        )
         e_n_prev = e_n
         k += 1
     return lambda_t, q_guess, Gamma, lambda_t_table
+
 
 def solve_config(static_model, lambda_t, force_steps=10, q_warm=None):
 
     if q_warm is not None:
         st_solver = static_model.solver
         nq = st_solver.system.nq
-        x0 = st_solver.x0.copy() if st_solver.x0 is not None else np.zeros(st_solver.nx, float)
+        x0 = (
+            st_solver.x0.copy()
+            if st_solver.x0 is not None
+            else np.zeros(st_solver.nx, float)
+        )
         x0[:nq] = q_warm
         st_solver.x0 = x0
     # ======= solve static equilibrium =======
-    sol, x, solver = static_model.apply_forces(lambda_t, verbose=False, force_steps=force_steps)
-    
+    sol, x, solver = static_model.apply_forces(
+        lambda_t, verbose=False, force_steps=force_steps
+    )
+
     # value evaluation
     rod = static_model.rod
     system = static_model.system
@@ -124,11 +143,12 @@ def solve_config(static_model, lambda_t, force_steps=10, q_warm=None):
     rhs = np.zeros((solver.nx, n_tendons))
     rhs[:nu, :] = W_t
 
-    dx = splu(J).solve(-rhs)   # dx_dT, shape (nx, n_tendons)
+    dx = splu(J).solve(-rhs)  # dx_dT, shape (nx, n_tendons)
     pos_idx = rod.qDOF[rod.nodalDOF_r[rod.nnode - 1]]
     Gamma = dx[pos_idx, :]
 
     return q_guess, Gamma
+
 
 class TendonForceControl:
     def __init__(
@@ -137,17 +157,19 @@ class TendonForceControl:
         Gamma,
         r_OP_traj,
         la_t_ref,
-        rod, 
-        tendons:list[RodTendonForce],
+        rod,
+        tendons: list[RodTendonForce],
         static_model=None,
         gamma_eps=1.0,
-        gamma_check_dt = 1.0,
+        gamma_check_dt=1.0,
         tau_ff=2.0,
         name="tendon_force_control",
     ) -> None:
         self.Kp = Kp
         self.Gamma = Gamma
-        self.Gamma_inv = Gamma.T @ np.linalg.solve(Gamma @ Gamma.T, np.eye(Gamma.shape[0]))
+        self.Gamma_inv = Gamma.T @ np.linalg.solve(
+            Gamma @ Gamma.T, np.eye(Gamma.shape[0])
+        )
         self.r_OP_traj = r_OP_traj
         self.la_t_ref = la_t_ref
         self.rod = rod
@@ -187,26 +209,34 @@ class TendonForceControl:
         r_OP_ref = self.r_OP_traj(t)
 
         # Recompute gamma
-        if (self.static_model is not None
-                and t - self.last_gamma_check_t >= self.gamma_check_dt):
+        if (
+            self.static_model is not None
+            and t - self.last_gamma_check_t >= self.gamma_check_dt
+        ):
             self.last_gamma_check_t = t
-            lambda_cur = np.clip(np.asarray(q[:self._nq1], dtype=float),
-                              lambda_t_min, lambda_t_max)
+            lambda_cur = np.clip(
+                np.asarray(q[: self._nq1], dtype=float), lambda_t_min, lambda_t_max
+            )
             try:
-                q_rod_cur = np.asarray(q[self._nq1:], dtype=float)
-                _, Gamma_cur = solve_config(self.static_model, lambda_cur, q_warm=q_rod_cur)
+                q_rod_cur = np.asarray(q[self._nq1 :], dtype=float)
+                _, Gamma_cur = solve_config(
+                    self.static_model, lambda_cur, q_warm=q_rod_cur
+                )
                 dGamma = Gamma_cur - self.Gamma
-                if np.linalg.norm(dGamma @ np.linalg.pinv(self.Gamma), 2) >= self.gamma_eps:        # Gamma0 no longer valid -> refresh
+                if (
+                    np.linalg.norm(dGamma @ np.linalg.pinv(self.Gamma), 2)
+                    >= self.gamma_eps
+                ):  # Gamma0 no longer valid -> refresh
                     self.Gamma = Gamma_cur
             except Exception:
                 pass
 
-        r_OP = self.rod._view_nodal_q(q[self._nq1:])[-1, :3]
+        r_OP = self.rod._view_nodal_q(q[self._nq1 :])[-1, :3]
         delta_r_OP = r_OP_ref - r_OP
         self._la_t_dot = self.Kp * self.Gamma_inv @ delta_r_OP
-        # self._la_t_dot = self.Kp * pinv(self.Gamma) @ delta_r_OP 
+        # self._la_t_dot = self.Kp * pinv(self.Gamma) @ delta_r_OP
         # self._la_t_dot = self.Kp * self.Gamma.T @ np.linalg.solve(self.Gamma @ self.Gamma.T, delta_r_OP)
-        for i, (td, delta_la) in enumerate(zip(self.tendons, q[:self._nq1])):
+        for i, (td, delta_la) in enumerate(zip(self.tendons, q[: self._nq1])):
             # td.set_force(lambda t, la=delta_la + la_t_ref[i]: la)
             td.set_force(lambda t, la=delta_la + self.la_t_ff[i]: la)
             # td.set_force(lambda t, la=delta_la + la_t_ref_table[-1][i]: la)
@@ -220,12 +250,8 @@ class TendonForceControl:
 
 
 class StaticSolver(Newton):
-    def __init__(
-        self, system, n_load_steps=1, verbose=True
-    ):
-        super().__init__(
-            system, n_load_steps, verbose
-        )
+    def __init__(self, system, n_load_steps=1, verbose=True):
+        super().__init__(system, n_load_steps, verbose)
         self.n_load_steps = self.nt - 1
         self.x0 = None
 
@@ -244,7 +270,6 @@ class StaticSolver(Newton):
         system = self.system
         self.x0 = np.concatenate((system.q0, system.la_g0))
 
-        
     def solve(self, warm_start=True):
         if warm_start and self.x0 is not None:
             self.x[0] = self.x0
@@ -252,6 +277,7 @@ class StaticSolver(Newton):
         if warm_start:
             self.x0 = self.x[-1]
         return res
+
 
 def interp1d(x, y, xi):
     """
@@ -270,18 +296,19 @@ def interp1d(x, y, xi):
         yi = y0 + (y1 - y0) * t
         return yi
 
+
 class CommonModel(ABC):
     def __init__(self):
         super().__init__()
         # ---- pysical parameters ----
-        rod_nelement = 10 # 1000
-        rod_l0 = 0.192 # [m] length of rod
-        rod_r0_base = 1.4e-2 # [m] radius at bottom of rod
-        rod_r0_tip = 8.5e-3 # [m] radius at tip of rod
-        self.rod_density = 1.41e3 # density of material
+        rod_nelement = 10  # 1000
+        rod_l0 = 0.192  # [m] length of rod
+        rod_r0_base = 1.4e-2  # [m] radius at bottom of rod
+        rod_r0_tip = 8.5e-3  # [m] radius at tip of rod
+        self.rod_density = 1.41e3  # density of material
         rod_A_IB0 = np.zeros((3, 3), dtype=np.float64)
         rod_A_IB0[0, 1] = rod_A_IB0[1, 2] = rod_A_IB0[2, 0] = 1
-        E, G = 2.563e5, 8.543e4 
+        E, G = 2.563e5, 8.543e4
 
         # ---- rod ----
         radius = lambda xi: rod_r0_base * (1 - xi) + rod_r0_tip * xi
@@ -300,7 +327,7 @@ class CommonModel(ABC):
 
         # ---- inital configuration ----
         def r_OP(xi):
-            return np.array([xi*rod_l0, 0, 0], dtype=np.float64)
+            return np.array([xi * rod_l0, 0, 0], dtype=np.float64)
 
         A_IB = lambda xi: np.eye(3, dtype=np.float64)
         q0 = DiscreteRod.pose_configuration(
@@ -317,7 +344,9 @@ class CommonModel(ABC):
             rod_nelement,
             Q=Q,
             q0=q0,
-            cross_section_inertias=CrossSectionInertias(self.rod_density, self.cross_section),
+            cross_section_inertias=CrossSectionInertias(
+                self.rod_density, self.cross_section
+            ),
         )
 
         # ---- rigid connections ----
@@ -351,13 +380,18 @@ class CommonModel(ABC):
 
         self.system.add(self.rod, rc, *self.tendons)
 
+
 class StaticModel(CommonModel):
     def __init__(self):
         super().__init__()
         g_acc = 9.81
         # ---- external forces ----
         gravity = Force_line_distributed(
-            lambda t, xi: self.rod_density * self.cross_section.area(xi) * g_acc * np.array([0, -1.0, 0], dtype=np.float64) * t,
+            lambda t, xi: self.rod_density
+            * self.cross_section.area(xi)
+            * g_acc
+            * np.array([0, -1.0, 0], dtype=np.float64)
+            * t,
             self.rod,
         )
         self.system.add(gravity)
@@ -423,11 +457,24 @@ class DynamicModel(CommonModel):
         g_acc = 9.81
         # ---- external forces ----
         gravity = Force_line_distributed(
-            lambda t, xi: self.rod_density * self.cross_section.area(xi) * g_acc * np.array([0, -1.0, 0], dtype=np.float64),
+            lambda t, xi: self.rod_density
+            * self.cross_section.area(xi)
+            * g_acc
+            * np.array([0, -1.0, 0], dtype=np.float64),
             self.rod,
         )
         static_model = StaticModel()
-        self.controller = TendonForceControl(Kp, Gamma, r_OP_traj, la_t_ref, self.rod, self.tendons, static_model=None, gamma_eps=1.0, gamma_check_dt = 1.0)
+        self.controller = TendonForceControl(
+            Kp,
+            Gamma,
+            r_OP_traj,
+            la_t_ref,
+            self.rod,
+            self.tendons,
+            static_model=None,
+            gamma_eps=1.0,
+            gamma_check_dt=1.0,
+        )
         for td, la in zip(self.tendons, la_t0):
             td.set_force(lambda t, la=la: la)
 
@@ -437,15 +484,16 @@ class DynamicModel(CommonModel):
 
         # set initial state of the system
         if q0 is not None:
-            self.system.set_new_initial_state(np.concatenate((q0, la_t0*0)), np.zeros(self.system.nu))
+            self.system.set_new_initial_state(
+                np.concatenate((q0, la_t0 * 0)), np.zeros(self.system.nu)
+            )
         self.solver = BackwardEuler(
             self.system,
             t1=t_sim,
             dt=1e-2,
-            options=SolverOptions(compute_consistent_initial_conditions=True)
+            options=SolverOptions(compute_consistent_initial_conditions=True),
         )
         # self.solver = ScipyDAE(self.system, t1=t_sim, dt=1e-2)
-
 
 
 # sol = static_model.apply_forces([1, 0, 0, 0], force_steps=30)
@@ -459,37 +507,51 @@ la_t0 = np.array([1, 1, 1, 1]) * 0.0
 
 # ---- reference trajectories ----
 
-t_scale = 1.0 # time scaling if needed
+t_scale = 1.0  # time scaling if needed
+
 
 def paper_to_cardillo(u):
     X, Y, Z = u
     return np.array([Y, Z, X])
 
+
 def make_circle(x_fn, y_fn, z_fn, t_period):
     def ref(t):
         th = 2.0 * np.pi * t / t_period - np.pi / 2  # start at circle bottom (near E)
         return paper_to_cardillo(np.array([x_fn(th), y_fn(th), z_fn(th)]))
+
     return ref
+
 
 def make_star_yz(y_c=0.0, z_c=-3.0e-2, R=6.5e-2, x_const=13.5e-2, t_total=70.0):
     angles = np.deg2rad(90.0 + 72.0 * np.arange(5))  # vertex 0 at top
     verts = [np.array([y_c + R * np.cos(a), z_c + R * np.sin(a)]) for a in angles]
-    order = [2, 4, 1, 3, 0, 2]  # pentagram (every 2nd), starting at vertex 2 (bottom-left)
+    order = [
+        2,
+        4,
+        1,
+        3,
+        0,
+        2,
+    ]  # pentagram (every 2nd), starting at vertex 2 (bottom-left)
     pts = [verts[i] for i in order]  # 6 points -> 5 edges
+
     def ref(t):
         s = np.clip(t / t_total, 0.0, 1.0) * 5.0
         i = min(int(s), 4)
         a = s - i
         y, z = (1.0 - a) * pts[i] + a * pts[i + 1]
         return paper_to_cardillo(np.array([x_const, y, z]))
+
     return ref
-        
+
+
 # if traj_mode == "circle_zy":
 #     x_c, z_c, rad = 10.3e-2, -1.75e-2, 3.0e-2
 #     t_period = 40.0 * t_scale  # [s] per lap (paper: 2 laps in ~80 s)
 #     t_end = 2 * t_period
 #     r_OP_ref_fn = make_circle(
-#         lambda th: x_c + rad * np.sin(th + np.pi),  
+#         lambda th: x_c + rad * np.sin(th + np.pi),
 #         lambda th: 0.0,
 #         lambda th: z_c + rad * np.cos(th),
 #         t_period,

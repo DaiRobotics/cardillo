@@ -1,7 +1,6 @@
 from tdcm_li2023_main import *
 
 
-
 SETPOINT_TABLE = {
     "A": np.array([15.438e-2, 4.335e-2, 3.399e-2]),
     "B": np.array([15.272e-2, -5.114e-2, -0.463e-2]),
@@ -15,55 +14,73 @@ def paper_to_cardillo(u):
     X, Y, Z = u
     return np.array([Y, Z, X])
 
+
 SETPOINT_TABLE = {k: paper_to_cardillo(u) for k, u in SETPOINT_TABLE.items()}
 
 
 def test_warm_start():
     print("Test warm start:")
     static_model = StaticModel()
-    static_model.apply_forces([1]*4, verbose=True, force_steps=10)
-    static_model.apply_forces([1]*4, verbose=True, force_steps=1)
+    static_model.apply_forces([1] * 4, verbose=True, force_steps=10)
+    static_model.apply_forces([1] * 4, verbose=True, force_steps=1)
 
 
 def test_one_setpoint_convergence():
     t_sim = 10
 
     static_model = StaticModel()
-    
+
     print("calc E")
     la_t_E = np.array([1.9, 1.8, 1.9, 2.1])
-    sol, x, solver = static_model.apply_forces(la_t_E, force_steps=10, ret_all_steps=False, verbose=True)
+    sol, x, solver = static_model.apply_forces(
+        la_t_E, force_steps=10, ret_all_steps=False, verbose=True
+    )
     r_OP_E = sol.q[-1, -7:-4]
     print("position E:", r_OP_E)
 
-
     print("calc E to A")
     la_t_A = np.array([0.7, 3.2, 0, 0])
-    la_t_EA = np.array((la_t_E, la_t_A))
-    sol, x, solver = static_model.apply_forces(la_t_EA, force_steps=40, ret_all_steps=True, verbose=True)
-    r_OP_ref = sol.q[:, -7:-4]
+    # la_t_A = la_t_E * 1.5
+    # TODO interpolate the force manually, and set ret_all_steps=False
+    sol2, x, solver = static_model.apply_forces(
+        la_t_A, force_steps=30, ret_all_steps=True, verbose=True
+    )
+    r_OP_ref = sol2.q[:, -7:-4]
+    r_OP_ref = np.concatenate((r_OP_E[None, :], r_OP_ref))
     print("position A:", r_OP_ref[-1])
 
     print("calc ref jacobians")
-    # TODO: fix bug
+    # TODO: fix bug, why need new static model
     static_model2 = StaticModel()
-    sol2, x, solver = static_model2.apply_forces(la_t_E, force_steps=10, ret_all_steps=False, verbose=True)
-    la_t_fb0, q0, Gamma0 = solve_ref_config(static_model2, r_OP_E, tol=1e-7, lambda_t0=la_t_E, force_steps=10)
+    sol3, x, solver = static_model2.apply_forces(
+        la_t_E, force_steps=10, ret_all_steps=False, verbose=True
+    )
+    la_t_fb0, q0, Gamma0 = solve_ref_config(
+        static_model2, r_OP_E, tol=1e-7, lambda_t0=la_t_E, force_steps=10
+    )
     q0[-7:-4] - r_OP_E
-    
+
     q0 = sol.q[-1]
     la_t_fb0 = la_t_E
 
     # def ref traj
     ts = np.linspace(0, t_sim, len(r_OP_ref))
+
     def r_OP_ref_fn(t):
         return np.array([interp1d(ts, r_OP_ref[:, i], t) for i in range(3)])
 
-    Kp = 0
-    dynamic_model = DynamicModel(t_sim, Kp, Gamma0, la_t_fb0, r_OP_ref_fn, lambda t: la_t_fb0, q0)    
+    la_t_EA = np.concatenate((la_t_E[None, :], la_t_A[None, :]))
+    ts2 = np.linspace(0, t_sim, len(la_t_EA))
+
+    def la_t_ref_fn(t):
+        return np.array([interp1d(ts2, la_t_EA[:, i], t) for i in range(4)])
+
+    print("dynamic control:")
+    Kp = 0.5
+    dynamic_model = DynamicModel(
+        t_sim, Kp, Gamma0, la_t_fb0, r_OP_ref_fn, la_t_ref_fn, q0, damping_ratio=0.0
+    )
     sol = dynamic_model.solver.solve()
-
-
 
     # ---- visualization ----
     rod = dynamic_model.rod
@@ -95,7 +112,6 @@ def test_one_setpoint_convergence():
     cam.view_up = -e_y_cam
     cam.clipping_range = (0.01, 2)
     cam.Zoom(1)
-
 
     # plotter.live_render()
     plotter.render_solution(sol, True, play_speed_up=1)
@@ -138,6 +154,7 @@ def test_one_setpoint_convergence():
     fig.tight_layout()
 
     plt.show()
+
 
 if __name__ == "__main__":
     # test_warm_start()

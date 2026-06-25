@@ -27,7 +27,9 @@ from scipy.sparse.linalg import splu
 G_ACCEL = 9.81
 
 
-def solve_ref_config(static_model, r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps=10):
+def solve_ref_config(
+    static_model, r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, force_steps=10
+):
 
     lambda_t = np.clip(np.array(lambda_t0, float), lambda_t_min, lambda_t_max)
     e_n_prev = np.inf
@@ -105,48 +107,48 @@ def solve_ref_config(static_model, r_OP_ref, lambda_t0, tol=1e-7, damping=1e-4, 
     return lambda_t, q_guess, Gamma
 
 
-def solve_config(static_model, lambda_t, force_steps=10, q_warm=None):
+# def solve_config(static_model, lambda_t, force_steps=10, q_warm=None):
 
-    if q_warm is not None:
-        st_solver = static_model.solver
-        nq = st_solver.system.nq
-        x0 = (
-            st_solver.x0.copy()
-            if st_solver.x0 is not None
-            else np.zeros(st_solver.nx, float)
-        )
-        x0[:nq] = q_warm
-        st_solver.x0 = x0
-    # ======= solve static equilibrium =======
-    sol, x, solver = static_model.apply_forces(
-        lambda_t, verbose=False, force_steps=force_steps
-    )
+#     if q_warm is not None:
+#         st_solver = static_model.solver
+#         nq = st_solver.system.nq
+#         x0 = (
+#             st_solver.x0.copy()
+#             if st_solver.x0 is not None
+#             else np.zeros(st_solver.nx, float)
+#         )
+#         x0[:nq] = q_warm
+#         st_solver.x0 = x0
+#     # ======= solve static equilibrium =======
+#     sol, x, solver = static_model.apply_forces(
+#         lambda_t, verbose=False, force_steps=force_steps
+#     )
 
-    # value evaluation
-    rod = static_model.rod
-    system = static_model.system
-    rod = static_model.rod
-    tendons = static_model.tendons
+#     # value evaluation
+#     rod = static_model.rod
+#     system = static_model.system
+#     rod = static_model.rod
+#     tendons = static_model.tendons
 
-    q_guess = sol.q[-1]
+#     q_guess = sol.q[-1]
 
-    x = x.flatten()
-    J = solver.jac(x, 1.0)
+#     x = x.flatten()
+#     J = solver.jac(x, 1.0)
 
-    nu = system.nu
-    n_tendons = static_model.n_tendons
-    W_t = np.zeros((nu, n_tendons))
-    for j, td in enumerate(tendons):
-        # W_t[td.uDOF, j] = -td.W_l(1.0, q_eq[td.qDOF])
-        np.add.at(W_t[:, j], td.uDOF, -td.W_l(1.0, q_guess[td.qDOF]))
-    rhs = np.zeros((solver.nx, n_tendons))
-    rhs[:nu, :] = W_t
+#     nu = system.nu
+#     n_tendons = static_model.n_tendons
+#     W_t = np.zeros((nu, n_tendons))
+#     for j, td in enumerate(tendons):
+#         # W_t[td.uDOF, j] = -td.W_l(1.0, q_eq[td.qDOF])
+#         np.add.at(W_t[:, j], td.uDOF, -td.W_l(1.0, q_guess[td.qDOF]))
+#     rhs = np.zeros((solver.nx, n_tendons))
+#     rhs[:nu, :] = W_t
 
-    dx = splu(J).solve(-rhs)  # dx_dT, shape (nx, n_tendons)
-    pos_idx = rod.qDOF[rod.nodalDOF_r[rod.nnode - 1]]
-    Gamma = dx[pos_idx, :]
+#     dx = splu(J).solve(-rhs)  # dx_dT, shape (nx, n_tendons)
+#     pos_idx = rod.qDOF[rod.nodalDOF_r[rod.nnode - 1]]
+#     Gamma = dx[pos_idx, :]
 
-    return q_guess, Gamma
+#     return q_guess, Gamma
 
 
 class TendonForceControl:
@@ -193,35 +195,34 @@ class TendonForceControl:
         self.uDOF = self.rod.uDOF
 
     def step_callback(self, t, q, u):
-        return q, u
         # Gamma = self.Gamma(t)
         # Ramp on feed forward (the bigger tau.ff, the slower the ramp)
-        la_t_ref_target = self.la_t_ref(t)
-        self.t_prev = t
+        # la_t_ref_target = self.la_t_ref(t)
+        # self.t_prev = t
         r_OP_ref = self.r_OP_ref(t)
 
-        # Recompute gamma
-        if (
-            self.static_model is not None
-            and t - self.last_gamma_check_t >= self.gamma_check_dt
-        ):
-            self.last_gamma_check_t = t
-            lambda_cur = np.clip(
-                np.asarray(q[: self._nq1], dtype=float), lambda_t_min, lambda_t_max
-            )
-            try:
-                q_rod_cur = np.asarray(q[self._nq1 :], dtype=float)
-                _, Gamma_cur = solve_config(
-                    self.static_model, lambda_cur, q_warm=q_rod_cur
-                )
-                dGamma = Gamma_cur - self.Gamma
-                if (
-                    np.linalg.norm(dGamma @ np.linalg.pinv(self.Gamma), 2)
-                    >= self.gamma_eps
-                ):  # Gamma0 no longer valid -> refresh
-                    self.Gamma = Gamma_cur
-            except Exception:
-                pass
+        # # Recompute gamma
+        # if (
+        #     self.static_model is not None
+        #     and t - self.last_gamma_check_t >= self.gamma_check_dt
+        # ):
+        #     self.last_gamma_check_t = t
+        #     lambda_cur = np.clip(
+        #         np.asarray(q[: self._nq1], dtype=float), lambda_t_min, lambda_t_max
+        #     )
+        #     try:
+        #         q_rod_cur = np.asarray(q[self._nq1 :], dtype=float)
+        #         _, Gamma_cur = solve_config(
+        #             self.static_model, lambda_cur, q_warm=q_rod_cur
+        #         )
+        #         dGamma = Gamma_cur - self.Gamma
+        #         if (
+        #             np.linalg.norm(dGamma @ np.linalg.pinv(self.Gamma), 2)
+        #             >= self.gamma_eps
+        #         ):  # Gamma0 no longer valid -> refresh
+        #             self.Gamma = Gamma_cur
+        #     except Exception:
+        #         pass
 
         r_OP = self.rod._view_nodal_q(q[self._nq1 :])[-1, :3]
         delta_r_OP = r_OP_ref - r_OP
@@ -233,7 +234,7 @@ class TendonForceControl:
         for td, la_t_i in zip(self.tendons, la_t):
             # td.set_force(lambda t, la=delta_la + la_t_ref[i]: la)
             td.set_force(lambda t, la=la_t_i: la)
-            
+
             # td.set_force(lambda t, la=delta_la + la_t_ref_table[-1][i]: la)
             # td.set_force(lambda t, la=delta_la: la)
         return q, u
@@ -270,7 +271,7 @@ class StaticSolver(Newton):
             self.x[0] = self.x0
         res = super().solve()
         if warm_start:
-            self.x0 = self.x[-1]
+            self.x0 = self.x[-1].copy()
         return res
 
 
@@ -293,7 +294,7 @@ def interp1d(x, y, xi):
 
 
 class CommonModel(ABC):
-    def __init__(self):
+    def __init__(self, damping_ratio=0):
         super().__init__()
         # ---- pysical parameters ----
         rod_nelement = 10  # 1000
@@ -342,6 +343,7 @@ class CommonModel(ABC):
             cross_section_inertias=CrossSectionInertias(
                 self.rod_density, self.cross_section
             ),
+            damping_ratio=damping_ratio,
         )
 
         # ---- rigid connections ----
@@ -458,8 +460,10 @@ class StaticModel(CommonModel):
 
 
 class DynamicModel(CommonModel):
-    def __init__(self, t_sim, Kp, Gamma, la_t0, r_OP_ref, la_t_ref, q0=None):
-        super().__init__()
+    def __init__(
+        self, t_sim, Kp, Gamma, la_t0, r_OP_ref, la_t_ref, q0=None, damping_ratio=0
+    ):
+        super().__init__(damping_ratio=damping_ratio)
         self.controller = TendonForceControl(
             Kp,
             Gamma,
@@ -490,8 +494,9 @@ class DynamicModel(CommonModel):
 
         # set initial state of the system
         if q0 is not None:
+            la_t_fb0 = np.zeros_like(la_t0)
             self.system.set_new_initial_state(
-                np.concatenate((q0, la_t0)), np.zeros(self.system.nu)
+                np.concatenate((q0, la_t_fb0)), np.zeros(self.system.nu)
             )
         self.solver = BackwardEuler(
             self.system,
@@ -507,16 +512,18 @@ class DynamicModel(CommonModel):
 # ----- controller parameters -----
 lambda_t_min = 0.0
 lambda_t_max = 50.0
-la_t0 = np.array([1, 1, 1, 1]) * 0.0
+# la_t0 = np.array([1, 1, 1, 1]) * 0.0
 
 # # ---- reference trajectories ----
 
 # traj_mode = "p2p" # "p2p", "circle_zy", "circle_xy", "star_yz"
 # t_scale = 1.0 # time scaling if needed
 
+
 def paper_to_cardillo(u):
     X, Y, Z = u
     return np.array([Y, Z, X])
+
 
 # def make_circle(x_fn, y_fn, z_fn, t_period):
 #     def ref(t):

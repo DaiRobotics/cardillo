@@ -1,4 +1,13 @@
-from tdcm_li2023_main import solve_config, solve_ref_config, paper_to_cardillo, DynamicModel, StaticModel, StaticSolver, TendonForceControl, CommonModel
+from tdcm_li2023_main import (
+    solve_config,
+    solve_ref_config,
+    paper_to_cardillo,
+    DynamicModel,
+    StaticModel,
+    StaticSolver,
+    TendonForceControl,
+    CommonModel,
+)
 import numpy as np
 from matplotlib import pyplot as plt
 
@@ -14,7 +23,7 @@ SETPOINT_TABLE = {
     "C": np.array([10.888e-2, 9.106e-2, -5.492e-2]),
     "D": np.array([14.615e-2, -4.486e-2, -6.375e-2]),
     "E": np.array([13.951e-2, 0.000e-2, -9.842e-2]),
-    "E2": np.array([13.951e-2, 0.000e-2, -9.842e-2])*1.2,
+    "E2": np.array([13.951e-2, 0.000e-2, -9.842e-2]) * 1.2,
 }
 SETPOINT_TABLE = {k: paper_to_cardillo(u) for k, u in SETPOINT_TABLE.items()}
 
@@ -22,10 +31,12 @@ t_end = 50
 sequence = ["A", "B", "C", "D", "E"]
 hold_t = t_end / (len(sequence))
 
+
 def r_OP_ref_fn(t):
     k = min(int(t / hold_t), len(sequence) - 1)
     # return SETPOINT_TABLE["E2"]
     return SETPOINT_TABLE[sequence[k]]
+
 
 for name in sequence:
     r_OP_ref = SETPOINT_TABLE[name]
@@ -35,17 +46,20 @@ for name in sequence:
     q0_table.append(q0)
     Gamma0_table.append(Gamma0)
     print(f"{name}")
+
+
 def la_t_ref_fn(t):
     if t == 0.0:
         return la_t_ref_table[-1]
     k = min(int(t / hold_t), len(sequence) - 1)
     return la_t_ref_table[k]
 
+
 ## Run Simulation
 
 # setpoint = "E"
 # r_OP_ref = SETPOINT_TABLE[setpoint]
-# # # r_OP_ref = r_OP_ref_fn(0.0)  
+# # # r_OP_ref = r_OP_ref_fn(0.0)
 # la_t0, q0, Gamma0 = solve_ref_config(r_OP_ref, tol=3e-4, lambda_t0=la_t0, force_steps=10)
 q0 = q0_table[-1]
 Gamma0 = Gamma0_table[-1]
@@ -136,7 +150,6 @@ atz.grid(True)
 
 fig.suptitle(f"Trajectory tracking (point-to-point)")
 fig.tight_layout()
-
 
 
 plt.show()

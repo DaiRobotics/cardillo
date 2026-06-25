@@ -1,4 +1,13 @@
-from tdcm_li2023_main import solve_config, solve_ref_config, paper_to_cardillo, DynamicModel, StaticModel, StaticSolver, TendonForceControl, CommonModel
+from tdcm_li2023_main import (
+    solve_config,
+    solve_ref_config,
+    paper_to_cardillo,
+    DynamicModel,
+    StaticModel,
+    StaticSolver,
+    TendonForceControl,
+    CommonModel,
+)
 import numpy as np
 from matplotlib import pyplot as plt
 
@@ -14,7 +23,7 @@ SETPOINT_TABLE = {
     "C": np.array([10.888e-2, 9.106e-2, -5.492e-2]),
     "D": np.array([14.615e-2, -4.486e-2, -6.375e-2]),
     "E": np.array([13.951e-2, 0.000e-2, -9.842e-2]),
-    "E2": np.array([13.951e-2, 0.000e-2, -9.842e-2])*1.2,
+    "E2": np.array([13.951e-2, 0.000e-2, -9.842e-2]) * 1.2,
 }
 SETPOINT_TABLE = {k: paper_to_cardillo(u) for k, u in SETPOINT_TABLE.items()}
 
@@ -22,10 +31,13 @@ t_end = 50
 sequence = ["A", "B", "C", "D", "E"]
 hold_t = t_end / (len(sequence))
 
+
 def r_OP_ref_fn(t):
     k = min(int(t / hold_t), len(sequence) - 1)
     # return SETPOINT_TABLE["E2"]
     return SETPOINT_TABLE[sequence[k]]
+
+
 la_tA_table = []
 la_tB_table = []
 la_tC_table = []
@@ -34,7 +46,9 @@ la_tE_table = []
 for name in sequence:
     r_OP_ref = SETPOINT_TABLE[name]
     # la_ref, _, _ = solve_ref_config(r_OP_ref, la_t0, tol = 3e-4, force_steps=20)
-    la_t_ref, q0, Gamma0, lambda_t_table = solve_ref_config(r_OP_ref, la_t0, force_steps=20)
+    la_t_ref, q0, Gamma0, lambda_t_table = solve_ref_config(
+        r_OP_ref, la_t0, force_steps=20
+    )
     if name == "A":
         la_tA_table = lambda_t_table
     elif name == "B":
@@ -49,29 +63,33 @@ for name in sequence:
     q0_table.append(q0)
     Gamma0_table.append(Gamma0)
     print(f"{name}")
+
+
 def la_t_ref_fn(t):
     if t == 0.0:
         return la_t_ref_table[-1]
     k = min(int(t / hold_t), len(sequence) - 1)
     return la_t_ref_table[k]
 
-# CSV 
-import csv
 
+# CSV
+import csv
 
 
 csv_path = r"C:\Users\tongd\OneDrive\Documents\Uni\HIWI_INM\cardillo\BA_Repo\scripts_tdcrobots\p2p_la_t.csv"
 with open(csv_path, "w", newline="") as csvfile:
     writer = csv.writer(csvfile)
     writer.writerow(["la_tA", "la_tB", "la_tC", "la_tD", "la_tE"])
-    for (la_tA, la_tB, la_tC, la_tD, la_tE) in zip(la_tA_table, la_tB_table, la_tC_table, la_tD_table, la_tE_table):
+    for la_tA, la_tB, la_tC, la_tD, la_tE in zip(
+        la_tA_table, la_tB_table, la_tC_table, la_tD_table, la_tE_table
+    ):
         writer.writerow([la_tA, la_tB, la_tC, la_tD, la_tE])
 exit()
 ## Run Simulation
 
 # setpoint = "E"
 # r_OP_ref = SETPOINT_TABLE[setpoint]
-# # # r_OP_ref = r_OP_ref_fn(0.0)  
+# # # r_OP_ref = r_OP_ref_fn(0.0)
 # la_t0, q0, Gamma0 = solve_ref_config(r_OP_ref, tol=3e-4, lambda_t0=la_t0, force_steps=10)
 q0 = q0_table[-1]
 Gamma0 = Gamma0_table[-1]
@@ -162,7 +180,6 @@ atz.grid(True)
 
 fig.suptitle(f"Trajectory tracking (point-to-point)")
 fig.tight_layout()
-
 
 
 plt.show()
