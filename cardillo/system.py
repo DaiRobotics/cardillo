@@ -107,9 +107,9 @@ class System:
 
                 if contr.name in self.contributions_map:
                     new_name = contr.name + "_contr" + str(self.ncontr)
-                    print(
-                        f"There is another contribution named '{contr.name}' which is already part of the system. Changed the name to '{new_name}' and added it to the system."
-                    )
+                    # print(
+                    #     f"There is another contribution named '{contr.name}' which is already part of the system. Changed the name to '{new_name}' and added it to the system."
+                    # )
                     contr.name = new_name
                 self.contributions_map[contr.name] = contr
                 self.ncontr += 1
