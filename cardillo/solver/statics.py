@@ -212,14 +212,15 @@ class Newton:
         # return solution object
         if self.verbose:
             pbar.close()
+        x = self.x.copy()
         return Solution(
             self.system,
-            t=self.load_steps,
-            q=self.x[: i + 1, : self.split_x[0]],
+            t=self.load_steps.copy(),
+            q=x[: i + 1, : self.split_x[0]],
             u=np.zeros((len(self.load_steps), self.nu)),
-            la_g=self.x[: i + 1, self.split_x[0] : self.split_x[1]],
-            la_c=self.x[: i + 1, self.split_x[1] : self.split_x[2]],
-            la_N=self.x[: i + 1, self.split_x[2] :],
+            la_g=x[: i + 1, self.split_x[0] : self.split_x[1]],
+            la_c=x[: i + 1, self.split_x[1] : self.split_x[2]],
+            la_N=x[: i + 1, self.split_x[2] :],
         )
 
 

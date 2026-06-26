@@ -38,10 +38,17 @@ def r_OP_ref_fn(t):
     return SETPOINT_TABLE[sequence[k]]
 
 
+la_tA_table = []
+la_tB_table = []
+la_tC_table = []
+la_tD_table = []
+la_tE_table = []
 for name in sequence:
     r_OP_ref = SETPOINT_TABLE[name]
     # la_ref, _, _ = solve_ref_config(r_OP_ref, la_t0, tol = 3e-4, force_steps=20)
-    la_t_ref, q0, Gamma0, lambda_t_table = solve_ref_config(r_OP_ref, la_t0, force_steps=20)
+    la_t_ref, q0, Gamma0, lambda_t_table = solve_ref_config(
+        r_OP_ref, la_t0, force_steps=20
+    )
     if name == "A":
         la_tA_table = lambda_t_table
     elif name == "B":
@@ -57,34 +64,27 @@ for name in sequence:
     Gamma0_table.append(Gamma0)
     print(f"{name}")
 
+
 def la_t_ref_fn(t):
-    return la_t_ref_table
+    if t == 0.0:
+        return la_t_ref_table[-1]
+    k = min(int(t / hold_t), len(sequence) - 1)
+    return la_t_ref_table[k]
 
-# # CSV 
+
+# CSV
 import csv
-from itertools import zip_longest
 
-# la_t tables per point
-# csv_path = r"C:\Users\tongd\OneDrive\Documents\Uni\HIWI_INM\cardillo\BA_Repo\scripts_tdcrobots\p2p_la_t.csv"
-# with open(csv_path, "w", newline="") as csvfile:
-#     writer = csv.writer(csvfile)
-#     writer.writerow(["la_tA", "la_tB", "la_tC", "la_tD", "la_tE"])
-#     for row in zip_longest(la_tA_table, la_tB_table, la_tC_table, la_tD_table, la_tE_table, fillvalue=""):
-#         writer.writerow(row)
 
-# q0 and Gamma0 and each point
-csv_path = r"C:\Users\tongd\OneDrive\Documents\Uni\HIWI_INM\cardillo\BA_Repo\scripts_tdcrobots\p2p_q0_gamma0.csv"
-columns = [np.asarray(q0).ravel() for q0 in q0_table] \
-        + [np.asarray(G).ravel()  for G  in Gamma0_table]
-header  = [f"q0_{n}" for n in sequence] + [f"Gamma0_{n}" for n in sequence]
+csv_path = r"C:\Users\tongd\OneDrive\Documents\Uni\HIWI_INM\cardillo\BA_Repo\scripts_tdcrobots\p2p_la_t.csv"
 with open(csv_path, "w", newline="") as csvfile:
     writer = csv.writer(csvfile)
-    writer.writerow(header)
-    for row in zip_longest(*columns, fillvalue=""):
-        writer.writerow(row)
-# exit()
-
-
+    writer.writerow(["la_tA", "la_tB", "la_tC", "la_tD", "la_tE"])
+    for la_tA, la_tB, la_tC, la_tD, la_tE in zip(
+        la_tA_table, la_tB_table, la_tC_table, la_tD_table, la_tE_table
+    ):
+        writer.writerow([la_tA, la_tB, la_tC, la_tD, la_tE])
+exit()
 ## Run Simulation
 
 # setpoint = "E"
@@ -99,7 +99,7 @@ Gamma0 = Gamma0_table[-1]
 Kp = 0.1
 t_sim = t_end
 dynamic_model = DynamicModel(t_sim, Kp, Gamma0, la_t0, r_OP_ref_fn, la_t_ref_fn, q0)
-exit()
+
 # ---- visualization ----
 rod = dynamic_model.rod
 tendons = dynamic_model.tendons
@@ -147,7 +147,7 @@ atx.plot(t, q[:, -1, 0] * 100, "r", label="actual")
 atx.plot(t, r_OP_traj[:, 0] * 100, "b--", label="desired")
 atx.set_xlabel("Time [s]")
 atx.set_xlim(0, 50)
-atx.set_xticks(np.arrange(0, 50.1, 5))
+atx.set_xticks(np.arange(0, 50.1, 5))
 atx.set_ylabel("X [cm]")
 atx.set_ylim(-5.2, 10)
 atx.set_yticks(np.array([-5, 0, 5, 10]))
@@ -159,7 +159,7 @@ aty.plot(t, q[:, -1, 1] * 100, "r", label="actual")
 aty.plot(t, r_OP_traj[:, 1] * 100, "b--", label="desired")
 aty.set_xlabel("Time [s]")
 aty.set_xlim(0, 50)
-aty.set_xticks(np.arrange(0, 50.1, 5))
+aty.set_xticks(np.arange(0, 50.1, 5))
 aty.set_ylabel("Y [cm]")
 aty.set_ylim(-10, 5)
 aty.set_yticks(np.array([-10, -5, 0, 5]))
@@ -171,10 +171,10 @@ atz.plot(t, q[:, -1, 2] * 100, "r", label="actual")
 atz.plot(t, r_OP_traj[:, 2] * 100, "b--", label="desired")
 atz.set_xlabel("Time [s]")
 atz.set_xlim(0, 50)
-atz.set_xticks(np.arrange(0, 50.1, 5))
+atz.set_xticks(np.arange(0, 50.1, 5))
 atz.set_ylabel("Z [cm]")
 atz.set_ylim(10, 18)
-atz.set_yticks(np.arrange(10, 18.1, 2))
+atz.set_yticks(np.arange(10, 18.1, 2))
 atz.legend()
 atz.grid(True)
 
