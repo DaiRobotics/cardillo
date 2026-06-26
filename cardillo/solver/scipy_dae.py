@@ -1,10 +1,14 @@
 import numpy as np
 from scipy.sparse import eye_array, lil_array
-from scipy_dae.integrate import solve_dae
+# from scipy_dae.integrate import solve_dae
+from solve_dae.integrate import solve_dae
 from tqdm import tqdm
 
 from cardillo.solver import Solution, SolverSummary
 from cardillo.utility.coo_matrix import CooMatrix
+
+COMPLIANCE_ODE = True
+COMPLIANCE_ODE = False
 
 
 # TODO:
@@ -54,29 +58,53 @@ class ScipyDAE:
                 dtype=int,
             )
         )[:-1]
-        self.y0 = np.concatenate(
-            (
-                system.q0,
-                system.u0,
-                0 * system.la_g0,
-                0 * system.la_g0,
-                0 * system.la_gamma0,
-                0 * system.la_c0,
+        if COMPLIANCE_ODE:
+            self.y0 = np.concatenate(
+                (
+                    system.q0,
+                    system.u0,
+                    0 * system.la_g0,
+                    0 * system.la_g0,
+                    0 * system.la_gamma0,
+                    0 * system.la_c0,
+                )
             )
-        )
-        self.y_dot0 = np.concatenate(
-            (
-                system.q_dot0,
-                system.u_dot0,
-                0 * system.la_g0,  # GGL multiplier
-                system.la_g0,
-                system.la_gamma0,
-                system.la_c0,
+            self.y_dot0 = np.concatenate(
+                (
+                    system.q_dot0,
+                    system.u_dot0,
+                    0 * system.la_g0,  # GGL multiplier
+                    system.la_g0,
+                    system.la_gamma0,
+                    system.la_c0,
+                )
             )
-        )
+        else:
+            self.y0 = np.concatenate(
+                (
+                    system.q0,
+                    system.u0,
+                    0 * system.la_g0,
+                    0 * system.la_g0,
+                    0 * system.la_gamma0,
+                    system.la_c0,
+                )
+            )
+            self.y_dot0 = np.concatenate(
+                (
+                    system.q_dot0,
+                    system.u_dot0,
+                    0 * system.la_g0,  # GGL multiplier
+                    system.la_g0,
+                    system.la_gamma0,
+                    0 * system.la_c0,
+                )
+            )
+
+        print(f"len(y0): {len(self.y0)}")
 
         # integration time
-        t0 = system.t0
+        self.t0 = t0 = system.t0
         self.t1 = (
             t1 if t1 > t0 else ValueError("t1 must be larger than initial time t0.")
         )
@@ -107,7 +135,10 @@ class ScipyDAE:
         eye_q = eye_array(self.nq)
         c_la_c = self.system.c_la_c()
         self.Jyp["eye_q", : self.split[0], : self.split[0]] = eye_q
-        self.Jyp["c_la_c", self.split[4] :, self.split[4] :] = c_la_c
+        if COMPLIANCE_ODE:
+            self.Jyp["c_la_c", self.split[4] :, self.split[4] :] = c_la_c
+        else:
+            self.Jy["c_la_c", self.split[4] :, self.split[4] :] = c_la_c
 
     def event(self, t, y, yp):
         q, u = np.array_split(y, self.split)[:2]
@@ -124,14 +155,25 @@ class ScipyDAE:
         # unpack vectors
         s1, s2, s3, s4, s5 = self.split
         q, u = y[:s1], y[s1:s2]
-        q_dot, u_dot, mu_g, la_g, la_gamma, la_c = (
-            yp[:s1],
-            yp[s1:s2],
-            yp[s2:s3],
-            yp[s3:s4],
-            yp[s4:s5],
-            yp[s5:],
-        )
+
+        if COMPLIANCE_ODE:
+            q_dot, u_dot, mu_g, la_g, la_gamma, la_c = (
+                yp[:s1],
+                yp[s1:s2],
+                yp[s2:s3],
+                yp[s3:s4],
+                yp[s4:s5],
+                yp[s5:],
+            )
+        else:
+            q_dot, u_dot, mu_g, la_g, la_gamma = (
+                yp[:s1],
+                yp[s1:s2],
+                yp[s2:s3],
+                yp[s3:s4],
+                yp[s4:s5],
+            )
+            la_c = y[s5:]
 
         # residual
         F = self.F
@@ -145,6 +187,7 @@ class ScipyDAE:
             g_q_T = self.g_q1_T = g_q.transpose(copy=False, coo=self.g_q1_T)
             F0 -= g_q_T.asformat("coo") @ mu_g
         F[: self.split[0]] = F0
+
         ####################
         # equations of motion
         ####################
@@ -187,12 +230,27 @@ class ScipyDAE:
 
     def jac(self, t, y, yp):
         # unpack vectors
-        s0, s1, s2, s3, s4 = self.split
-        q, u = y[:s0], y[s0:s1]
-        u_dot = yp[s0:s1]
-        la_g = yp[s2:s3]
-        la_gamma = yp[s3:s4]
-        la_c = yp[s4:]
+        s1, s2, s3, s4, s5 = self.split
+        q, u = y[:s1], y[s1:s2]
+
+        if COMPLIANCE_ODE:
+            q_dot, u_dot, mu_g, la_g, la_gamma, la_c = (
+                yp[:s1],
+                yp[s1:s2],
+                yp[s2:s3],
+                yp[s3:s4],
+                yp[s4:s5],
+                yp[s5:],
+            )
+        else:
+            q_dot, u_dot, mu_g, la_g, la_gamma = (
+                yp[:s1],
+                yp[s1:s2],
+                yp[s2:s3],
+                yp[s3:s4],
+                yp[s4:s5],
+            )
+            la_c = y[s5:]
 
         sys = self.system
 
@@ -210,15 +268,15 @@ class ScipyDAE:
         h_q = self.h_q = self.system.h_q(t, q, u, format="Coo", coo=self.h_q)
         h_u = self.h_u = self.system.h_u(t, q, u, format="Coo", coo=self.h_u)
 
-        Jy["q_dot_q", :s0, :s0] = -q_dot_q
-        Jy["q_dot_u", :s0, s0:s1] = -q_dot_u
+        Jy["q_dot_q", :s1, :s1] = -q_dot_q
+        Jy["q_dot_u", :s1, s1:s2] = -q_dot_u
         # note: Here we ignore the derivative d((dg/dq)^T mu) / dq since
         # `solve_dae` already performs an inexact Newton method.
         # Jy[:self.split[0], self.split[1]:self.split[2]] = g_q_T_mu_q
 
-        Jy["Mu_q", s0:s1, :s0] = Mu_q
-        Jy["h_q", s0:s1, :s0] = -h_q
-        Jy["h_u", s0:s1, s0:s1] = -h_u
+        Jy["Mu_q", s1:s2, :s1] = Mu_q
+        Jy["h_q", s1:s2, :s1] = -h_q
+        Jy["h_u", s1:s2, s1:s2] = -h_u
         if sys.nla_tau:
             Wla_tau_q = self.Wla_tau_q = self.system.Wla_tau_q(
                 t, q, u, format="Coo", coo=self.Wla_tau_q
@@ -226,8 +284,8 @@ class ScipyDAE:
             Wla_tau_u = self.Wla_tau_u = self.system.Wla_tau_u(
                 t, q, u, format="Coo", coo=self.Wla_tau_u
             )
-            Jy["Wla_tau_q", s0:s1, :s0] = -Wla_tau_q
-            Jy["Wla_tau_u", s0:s1, s0:s1] = -Wla_tau_u
+            Jy["Wla_tau_q", s1:s2, :s1] = -Wla_tau_q
+            Jy["Wla_tau_u", s1:s2, s1:s2] = -Wla_tau_u
         if sys.nla_gamma:
             Wla_gamma_q = self.Wla_gamma_q = self.system.Wla_gamma_q(
                 t, q, la_gamma, format="Coo", coo=self.Wla_gamma_q
@@ -238,9 +296,9 @@ class ScipyDAE:
             gamma_u = self.gamma_u = self.system.gamma_u(
                 t, q, format="Coo", coo=self.gamma_u
             )
-            Jy["Wla_gamma_q", s0:s1, :s0] = -Wla_gamma_q
-            Jy["gamma_q", s3:s4, :s0] = gamma_q
-            Jy["gamma_u", s3:s4, s0:s1] = gamma_u
+            Jy["Wla_gamma_q", s1:s2, :s1] = -Wla_gamma_q
+            Jy["gamma_q", s4:s5, :s1] = gamma_q
+            Jy["gamma_u", s4:s5, s1:s2] = gamma_u
 
         if sys.nla_g:
             Wla_g_q = self.Wla_g_q = self.system.Wla_g_q(
@@ -253,10 +311,10 @@ class ScipyDAE:
             g_dot_u = self.g_dot_u = self.system.g_dot_u(
                 t, q, format="Coo", coo=self.g_dot_u
             )
-            Jy["Wla_g_q", s0:s1, :s0] = -Wla_g_q
-            Jy["g_q", s1:s2, :s0] = g_q
-            Jy["g_dot_q", s2:s3, :s0] = g_dot_q
-            Jy["g_dot_u", s2:s3, s0:s1] = g_dot_u
+            Jy["Wla_g_q", s1:s2, :s1] = -Wla_g_q
+            Jy["g_q", s2:s3, :s1] = g_q
+            Jy["g_dot_q", s3:s4, :s1] = g_dot_q
+            Jy["g_dot_u", s3:s4, s1:s2] = g_dot_u
 
         if sys.nla_c:
             Wla_c_q = self.Wla_c_q = self.system.Wla_c_q(
@@ -264,43 +322,48 @@ class ScipyDAE:
             )
             c_q = self.c_q = self.system.c_q(t, q, u, la_c, format="Coo", coo=self.c_q)
             c_u = self.c_u = self.system.c_u(t, q, u, la_c, format="Coo", coo=self.c_u)
-            Jy["Wla_c_q", s0:s1, :s0] = -Wla_c_q
-            Jy["c_q", s4:, :s0] = c_q
-            Jy["c_u", s4:, s0:s1] = c_u
+            Jy["Wla_c_q", s1:s2, :s1] = -Wla_c_q
+            Jy["c_q", s5:, :s1] = c_q
+            Jy["c_u", s5:, s1:s2] = c_u
+
+            if not COMPLIANCE_ODE:
+                W_c = self.W_c2 = self.system.W_c(t, q, format="Coo", coo=self.W_c2)
+                Jy["W_c", s1:s2, s5:] = -W_c
 
         # second Jacobian w.r.t. yp
         Jyp = self.Jyp
 
         M = self.M1 = self.system.M(t, q, format="Coo", coo=self.M1)
 
-        Jyp["M", s0:s1, s0:s1] = M
+        Jyp["M", s1:s2, s1:s2] = M
         if sys.nla_g:
             W_g = self.W_g2 = self.system.W_g(t, q, format="Coo", coo=self.W_g2)
-            Jyp["g_q_T", :s0, s1:s2] = -g_q.T
-            Jyp["W_g", s0:s1, s2:s3] = -W_g
+            Jyp["g_q_T", :s1, s2:s3] = -g_q.T
+            Jyp["W_g", s1:s2, s3:s4] = -W_g
         if sys.nla_gamma:
             W_gamma = self.W_gamma2 = self.system.W_gamma(
                 t, q, format="Coo", coo=self.W_gamma2
             )
-            Jyp["W_gamma", s0:s1, s3:s4] = -W_gamma
-        if sys.nla_c:
-            W_c = self.W_c2 = self.system.W_c(t, q, format="Coo", coo=self.W_c2)
-            Jyp["W_c", s0:s1, s4:] = -W_c
+            Jyp["W_gamma", s1:s2, s4:s5] = -W_gamma
+        if COMPLIANCE_ODE:
+            if sys.nla_c:
+                W_c = self.W_c2 = self.system.W_c(t, q, format="Coo", coo=self.W_c2)
+                Jyp["W_c", s1:s2, s5:] = -W_c
 
         return Jy.asformat("coo"), Jyp.asformat("coo")
 
-        # note: Keep this for debugging the Jacobian
+        # # note: Keep this for debugging the Jacobian
 
         # from scipy.optimize._numdiff import approx_derivative
 
         # Jy_num = approx_derivative(lambda y: self.fun(t, y, yp), y, method="2-point")
-        # diff_Jy = Jy - Jy_num
+        # diff_Jy = Jy.asformat("coo") - Jy_num
         # diff_Jy = diff_Jy[self.split[0]:, self.split[0]:] # ignore kinematic equations since GGL Jacobian use not implemented
         # error_Jy = np.linalg.norm(diff_Jy)
         # print(f"error_Jy: {error_Jy}")
 
         # Jyp_num = approx_derivative(lambda yp: self.fun(t, y, yp), yp, method="2-point")
-        # diff_Jyp = Jyp - Jyp_num
+        # diff_Jyp = Jyp.asformat("coo") - Jyp_num
         # error_Jyp = np.linalg.norm(diff_Jyp)
         # print(f"error_Jyp: {error_Jyp}")
 
@@ -310,27 +373,41 @@ class ScipyDAE:
         solver_summary = SolverSummary(f"Scipy solve_dae with method '{self.method}'")
         sol = solve_dae(
             self.fun,
-            self.t_eval[[0, -1]],
+            # self.t_eval[[0, -1]],
+            (self.t0, self.t1),
             self.y0,
             self.y_dot0,
-            t_eval=self.t_eval,
+            # t_eval=self.t_eval,
+            t_eval= None,
             method=self.method,
             rtol=self.rtol,
             atol=self.atol,
             events=[self.event],
             jac=self.jac,
+            dense_output=True,
             **self.kwargs,
         )
         self.pbar.close()
         # solver_summary.print()
 
+        print(f"sol:\n{sol}")
+        print(f"number of steps: {len(sol.t)}")
+        print(f"averate step-size: {np.sum(np.diff(sol.t)) / len(sol.t[:-1])}")
+
+        # compute dense output solution
+        t = self.t_eval
+        y, yp = sol.sol(t)
+
         # unpack solution
-        t = sol.t
-        q, u, _, _, _, _ = np.array_split(sol.y, self.split)
-        q_dot, u_dot, mu_g, la_g, la_gamma, la_c = np.array_split(sol.yp, self.split)
+        # t = sol.t
+        # q, u, _, _, _, _ = np.array_split(sol.y, self.split)
+        # q_dot, u_dot, mu_g, la_g, la_gamma, la_c = np.array_split(sol.yp, self.split)
+        q, u, _, _, _, _ = np.array_split(y, self.split)
+        q_dot, u_dot, mu_g, la_g, la_gamma, la_c = np.array_split(yp, self.split)
 
         return Solution(
             system=self.system,
+            t_eval=sol.t,
             t=t,
             q=q.T,
             u=u.T,
