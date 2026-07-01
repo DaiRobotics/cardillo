@@ -65,6 +65,7 @@ class Newton:
         ) = self._Wla_c_q_coo = self._c_q_coo = self._g_q_coo = self._g_S_q_coo = (
             self._Wla_N_q_coo
         ) = self._g_N_q_coo = None
+        self._c_coo = self._h_coo = None
         self._jac_coo = CooMatrix((self.nx, self.nx))
 
     def fun(self, x, t):
@@ -80,17 +81,38 @@ class Newton:
         self._W_g_coo = self.system.W_g(t, q, format="Coo", coo=self._W_g_coo)
         self._W_c_coo = self.system.W_c(t, q, format="Coo", coo=self._W_c_coo)
         self._W_N_coo = self.system.W_N(t, q, format="Coo", coo=self._W_N_coo)
-        W_g = self._W_g_coo.tocsr(fix_size=True)
-        W_c = self._W_c_coo.tocsr(fix_size=True)
-        W_N = self._W_N_coo.tocsr(fix_size=True)
-        self.g_N = self.system.g_N(t, q)
+
+        self._c_coo = self.system.c(t, q, self.u0, la_c, format="Coo", coo=self._c_coo)
+        self._h_coo = self.system.h(t, q, self.u0, format="Coo", coo=self._h_coo)
 
         # static equilibrium
         F = np.zeros_like(x)
-        F[:r0] = self.system.h(t, q, self.u0) + W_g @ la_g + W_c @ la_c + W_N @ la_N
+
+        self._h_coo.manual_sync()
+        self._h_coo._manual_sync = True
+        h = self._h_coo.toarray(fix_size=True)
+
+        self._W_g_coo.manual_sync()
+        self._W_g_coo._manual_sync = True
+        W_g = self._W_g_coo.tocsr(fix_size=True)
+
+        self._W_c_coo.manual_sync()
+        self._W_c_coo._manual_sync = True
+        W_c = self._W_c_coo.tocsr(fix_size=True)
+
+        W_N = self._W_N_coo.tocsr(fix_size=True)
+        self.g_N = self.system.g_N(t, q)
+
+        F[:r0] = h + W_g @ la_g + W_c @ la_c + W_N @ la_N
+
         F[r0:r1] = self.system.g(t, q)
-        F[r1:r2] = self.system.c(t, q, self.u0, la_c)
+
+        self._c_coo.manual_sync()
+        self._c_coo._manual_sync = True
+        F[r1:r2] = self._c_coo.toarray(fix_size=True)
+
         F[r2:r3] = self.system.g_S(t, q)
+
         F[r3:] = np.minimum(la_N, self.g_N)
         return F
 
@@ -100,29 +122,62 @@ class Newton:
         # unpack unknowns
         q, la_g, la_c, la_N = x[:c0], x[c0:c1], x[c1:c2], x[c2:]
 
-        self._g_N_q_coo = self.system.g_N_q(t, q, format="Coo", coo=self._g_N_q_coo)
-        if self._g_N_q_coo.not_empty:
-            self._jac_coo = CooMatrix((self.nx, self.nx))
-        jac = self._jac_coo
         # evaluate additionally required quantites for computing the jacobian
         # coo is used for efficient bmat
-        self._h_q_coo = self.system.h_q(t, q, self.u0, format="Coo", coo=self._h_q_coo)
-        self._Wla_g_q_coo = self.system.Wla_g_q(
-            t, q, la_g, format="Coo", coo=self._Wla_g_q_coo
+        h_q = self._h_q_coo = self.system.h_q(
+            t, q, self.u0, format="Coo", coo=self._h_q_coo
         )
-        self._Wla_c_q_coo = self.system.Wla_c_q(
-            t, q, la_c, format="Coo", coo=self._Wla_c_q_coo
-        )
-        self._c_q_coo = self.system.c_q(
+        c_q = self._c_q_coo = self.system.c_q(
             t, q, self.u0, la_c, format="Coo", coo=self._c_q_coo
         )
-        self._g_q_coo = self.system.g_q(t, q, format="Coo", coo=self._g_q_coo)
-        self._g_S_q_coo = self.system.g_S_q(t, q, format="Coo", coo=self._g_S_q_coo)
+        Wla_g_q = self._Wla_g_q_coo = self.system.Wla_g_q(
+            t, q, la_g, format="Coo", coo=self._Wla_g_q_coo
+        )
+        Wla_c_q = self._Wla_c_q_coo = self.system.Wla_c_q(
+            t, q, la_c, format="Coo", coo=self._Wla_c_q_coo
+        )
+        g_q = self._g_q_coo = self.system.g_q(t, q, format="Coo", coo=self._g_q_coo)
+        g_S_q = self._g_S_q_coo = self.system.g_S_q(
+            t, q, format="Coo", coo=self._g_S_q_coo
+        )
         c_la_c = self.system.c_la_c()
 
         # note: csr_matrix is best for row slicing, see
         # https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_array.html#scipy.sparse.csr_array
-        if self._g_N_q_coo.not_empty:
+        if self.nla_N:
+            self._jac_coo = CooMatrix((self.nx, self.nx))
+        jac = self._jac_coo
+        jac["W_g", :r0, c0:c1] = self._W_g_coo
+        jac["W_c", :r0, c1:c2] = self._W_c_coo
+        jac["c_la_c", r1:r2, c1:c2] = c_la_c
+        jac["g_S_q", r2:r3, :c0] = g_S_q
+
+        #
+        g_q.manual_sync()
+        g_q._manual_sync = True
+        jac["g_q", r0:r1, :c0] = g_q
+
+        Wla_g_q.manual_sync()
+        Wla_g_q._manual_sync = True
+        jac["Wla_g_q", :r0, :c0] = Wla_g_q
+
+        Wla_c_q.manual_sync()
+        Wla_c_q._manual_sync = True
+        jac["Wla_c_q", :r0, :c0] = Wla_c_q
+
+        h_q.manual_sync()
+        h_q._manual_sync = True
+        jac["h_q", :r0, :c0] = h_q
+
+        c_q.manual_sync()
+        c_q._manual_sync = True
+        jac["c_q", r1:r2, :c0] = c_q
+
+        if self.nla_N:
+            self._g_N_q_coo = self.system.g_N_q(t, q, format="Coo", coo=self._g_N_q_coo)
+            self._Wla_N_q_coo = self.system.Wla_N_q(
+                t, q, la_N, format="Coo", coo=self._Wla_N_q_coo
+            )
             g_N_q = self._g_N_q_coo.tocsr(fix_size=True)
 
             Rla_N_q = lil_array((self.nla_N, self.nq), dtype=float)
@@ -135,22 +190,7 @@ class Newton:
             jac["W_N", :r0, c2:] = self._W_N_coo
             jac["Rla_N_q", r3:, :c0] = Rla_N_q
             jac["Rla_N_la_N", r3:, c2:] = Rla_N_q
-        jac["h_q", :r0, :c0] = self._h_q_coo
-        jac["Wla_g_q", :r0, :c0] = self._Wla_g_q_coo
-        jac["Wla_c_q", :r0, :c0] = self._Wla_c_q_coo
-
-        self._Wla_N_q_coo = self.system.Wla_N_q(
-            t, q, la_N, format="Coo", coo=self._Wla_N_q_coo
-        )
-        if self._Wla_N_q_coo.not_empty:
             jac["Wla_N_q", :r0, :c0] = self._Wla_N_q_coo
-
-        jac["W_g", :r0, c0:c1] = self._W_g_coo
-        jac["W_c", :r0, c1:c2] = self._W_c_coo
-        jac["g_q", r0:r1, :c0] = self._g_q_coo
-        jac["c_q", r1:r2, :c0] = self._c_q_coo
-        jac["c_la_c", r1:r2, c1:c2] = c_la_c
-        jac["g_S_q", r2:r3, :c0] = self._g_S_q_coo
 
         return jac.tocsc(fix_size=True)
         # return bmat([[      K, self.W_g, self.W_c,   self.W_N],

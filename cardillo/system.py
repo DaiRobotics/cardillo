@@ -3,7 +3,7 @@ import warnings
 from copy import deepcopy
 from scipy.sparse import diags
 
-from cardillo.utility.coo_matrix import CooMatrix
+from cardillo.utility.coo_matrix import CooMatrix, CooArray
 from cardillo.discrete.frame import Frame
 from cardillo.discrete.meshed import Axis
 from cardillo.solver import consistent_initial_conditions
@@ -66,8 +66,8 @@ class System:
 
     """
 
-    def __init__(self, t0=0.0, origin_size=0):
-        self.t0 = t0
+    def __init__(self, t0=0, origin_size=0):
+        self.t0 = np.float64(t0)
         self.nq = 0
         self.nu = 0
         self.nla_g = 0
@@ -342,11 +342,18 @@ class System:
     #####################
     # kinematic equations
     #####################
-    def q_dot(self, t, q, u):
-        q_dot = np.zeros(self.nq, dtype=float)
-        for contr in self.__q_dot_contr:
-            q_dot[contr.my_qDOF] = contr.q_dot(t, q[contr.qDOF], u[contr.uDOF])
-        return q_dot
+    def q_dot(self, t, q, u, format="dense", coo=None):
+        if format == "dense" and coo is None:
+            q_dot = np.zeros(self.nq, dtype=float)
+            for contr in self.__q_dot_contr:
+                q_dot[contr.my_qDOF] = contr.q_dot(t, q[contr.qDOF], u[contr.uDOF])
+            return q_dot
+        elif format == "Coo":
+            if coo is None:
+                coo = CooArray(self.nq)
+            for i, contr in enumerate(self.__q_dot_contr):
+                coo[i, contr.my_qDOF] = contr.q_dot(t, q[contr.qDOF], u[contr.uDOF])
+            return coo
 
     def q_dot_q(self, t, q, u, format="coo", coo=None):
         if coo is None:
@@ -409,15 +416,22 @@ class System:
             coo[i, contr.uDOF, contr.qDOF] = contr.Mu_q(t, q[contr.qDOF], u[contr.uDOF])
         return coo.asformat(format, fix_size=True)
 
-    def h(self, t, q, u):
-        h = np.zeros(self.nu, dtype=float)
-        for contr in self.__h_contr:
-            np.add.at(h, contr.uDOF, contr.h(t, q[contr.qDOF], u[contr.uDOF]))
-            # maybe faster to sum up contributions for the same uDOF first and then add to h
-            # uDOF, inv = np.unique(contr.uDOF, return_inverse=True)
-            # sums = np.bincount(inv, weights=contr.h(t, q[contr.qDOF], u[contr.uDOF]))
-            # h[uDOF] += sums
-        return h
+    def h(self, t, q, u, format="dense", coo=None):
+        if format == "dense" and coo is None:
+            h = np.zeros(self.nu, dtype=float)
+            for contr in self.__h_contr:
+                np.add.at(h, contr.uDOF, contr.h(t, q[contr.qDOF], u[contr.uDOF]))
+                # maybe faster to sum up contributions for the same uDOF first and then add to h
+                # uDOF, inv = np.unique(contr.uDOF, return_inverse=True)
+                # sums = np.bincount(inv, weights=contr.h(t, q[contr.qDOF], u[contr.uDOF]))
+                # h[uDOF] += sums
+            return h
+        elif format == "Coo":
+            if coo is None:
+                coo = CooArray(self.nu)
+            for i, contr in enumerate(self.__h_contr):
+                coo[i, contr.uDOF] = contr.h(t, q[contr.qDOF], u[contr.uDOF])
+            return coo
 
     def h_q(self, t, q, u, format="coo", coo=None):
         if coo is None:
@@ -442,13 +456,22 @@ class System:
             la_c[contr.la_cDOF] = contr.la_c(t, q[contr.qDOF], u[contr.uDOF])
         return la_c
 
-    def c(self, t, q, u, la_c):
-        c = np.zeros(self.nla_c, dtype=float)
-        for contr in self.__c_contr:
-            c[contr.la_cDOF] = contr.c(
-                t, q[contr.qDOF], u[contr.uDOF], la_c[contr.la_cDOF]
-            )
-        return c
+    def c(self, t, q, u, la_c, format="dense", coo=None):
+        if format == "dense" and coo is None:
+            c = np.zeros(self.nla_c, dtype=float)
+            for contr in self.__c_contr:
+                c[contr.la_cDOF] = contr.c(
+                    t, q[contr.qDOF], u[contr.uDOF], la_c[contr.la_cDOF]
+                )
+            return c
+        elif format == "Coo":
+            if coo is None:
+                coo = CooArray(self.nla_c)
+            for i, contr in enumerate(self.__c_contr):
+                coo[i, contr.la_cDOF] = contr.c(
+                    t, q[contr.qDOF], u[contr.uDOF], la_c[contr.la_cDOF]
+                )
+            return coo
 
     def c_q(self, t, q, u, la_c, format="coo", coo=None):
         if coo is None:

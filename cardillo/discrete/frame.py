@@ -1,4 +1,5 @@
 import numpy as np
+from jax import numpy as jnp
 from vtk import VTK_VERTEX
 from cardillo.math import skew2ax, Log_SO3_quat
 from cardillo.utility.check_time_derivatives import check_time_derivatives
@@ -48,6 +49,7 @@ class Frame:
         self.u0 = np.array([])
 
         self.name = name
+        self._jaxed = True
 
     #####################
     # kinematic equations
@@ -88,8 +90,14 @@ class Frame:
     def J_P(self, t, q=None, xi=None, B_r_CP=np.zeros(3)):
         return np.empty((3, 0))
 
+    def J_P_jx(self, t, q=None, xi=None, B_r_CP=np.zeros(3)):
+        return jnp.empty((3, 0))
+
     def J_P_q(self, t, q, xi=None, B_r_CP=np.zeros(3)):
         return np.empty((3, 0, 0))
+
+    def J_P_q_jx(self, t, q, xi=None, B_r_CP=np.zeros(3)):
+        return jnp.empty((3, 0, 0))
 
     def a_P(self, t, q=None, u=None, u_dot=None, xi=None, B_r_CP=np.zeros(3)):
         return self.r_OP_tt__(t) + self.A_IB_tt__(t) @ B_r_CP

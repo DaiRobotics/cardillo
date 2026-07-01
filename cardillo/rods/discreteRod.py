@@ -208,292 +208,13 @@ class ElementKinematics(ABC):
     J_P_batch = jit(vmap(J_P.__func__))
     J_P_q_batch = jit(vmap(J_P_q.__func__))
 
-    B_Omega_q = np.zeros((3, 14), dtype=float)
-    B_J_R_q = np.zeros((3, 12, 14), dtype=float)
-    B_Psi_q = np.zeros((3, 14), dtype=float)
-    B_Psi_u = np.zeros((3, 12), dtype=float)
+    B_Omega_q = jnp.zeros((3, 14))
+    B_J_R_q = jnp.zeros((3, 12, 14))
+    B_Psi_q = jnp.zeros((3, 14))
+    B_Psi_u = jnp.zeros((3, 12))
 
 
 class DiscreteRod:
-    @staticmethod
-    @jit
-    def _gen_element_q(q):
-        nelement = q.shape[0] // 7 - 1
-        q_nodes = q[: (nelement + 1) * 7].reshape(nelement + 1, 7)
-        return jnp.concatenate([q_nodes[:-1], q_nodes[1:]], axis=1)  # (nelement, 14)
-
-    @staticmethod
-    @jit
-    def _gen_element_u(u):
-        nelement = u.shape[0] // 6 - 1
-        u_nodes = u[: (nelement + 1) * 6].reshape(nelement + 1, 6)
-        return jnp.concatenate([u_nodes[:-1], u_nodes[1:]], axis=1)  # (nelement, 12)
-
-    @staticmethod
-    @jit
-    def _q_dot_node(q, u):
-        T = math_jax.T_SO3_inv_quat(q[3:]) @ u[3:]
-        return jnp.concatenate([u[:3], T])
-
-    @staticmethod
-    @jit
-    def _p_dot_p_node(q, u):
-        return u[3:] @ math_jax.T_SO3_inv_quat_P(q[3:])
-
-    @staticmethod
-    @jit
-    def _h_node(u, B_Theta_C):
-        B_omega_IB = u[3:]
-        tmp = B_Theta_C @ B_omega_IB
-        cross = math_jax.cross3(tmp, B_omega_IB)
-        return jnp.pad(cross, (3, 0))
-
-    @staticmethod
-    @jit
-    def _h_u_node(B_omega_IB, B_Theta_C):
-        return (
-            math_jax.ax2skew(B_Theta_C @ B_omega_IB)
-            - math_jax.ax2skew(B_omega_IB) @ B_Theta_C
-        )
-
-    @staticmethod
-    @jit
-    def _la_c_el(qe, Le, B_gamma0, B_kappa0, K_ga, K_ka):
-        A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
-        B_n = K_ga @ (B_gamma - B_gamma0)
-        B_m = K_ka @ (B_kappa - B_kappa0)
-        return jnp.concatenate([B_n, B_m])
-
-    @staticmethod
-    @jit
-    def _la_c_damp_el(qe, ue, Le, B_gamma0, B_kappa0, K_ga, K_ka, K_ga_damp, K_ka_damp):
-        la_c_12 = DiscreteRod._la_c_el(qe, Le, B_gamma0, B_kappa0, K_ga, K_ka)
-        B_gamma_dot, B_kappa_dot = DiscreteRod._eval_dot_el(qe, ue, Le)
-        B_n_damp = K_ga_damp @ B_gamma_dot
-        B_m_damp = K_ka_damp @ B_kappa_dot
-        return jnp.concatenate([la_c_12, B_n_damp, B_m_damp])
-
-    @staticmethod
-    @jit
-    def _c_el(qe, la_c, Le, B_gamma0, B_kappa0, C_n, C_m):
-        A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
-        B_n, B_m = la_c[:3], la_c[3:]
-
-        c1 = (C_n @ B_n - (B_gamma - B_gamma0)) * Le
-        c2 = (C_m @ B_m - (B_kappa - B_kappa0)) * Le
-
-        return jnp.concatenate([c1, c2])
-
-    @staticmethod
-    @jit
-    def _c_damp_el(qe, ue, la_c, Le, B_gamma0, B_kappa0, C_n, C_m, C_n_damp, C_m_damp):
-        c12 = DiscreteRod._c_el(qe, la_c[:6], Le, B_gamma0, B_kappa0, C_n, C_m)
-        B_gamma_dot, B_kappa_dot = DiscreteRod._eval_dot_el(qe, ue, Le)
-        B_n_damp, B_m_damp = la_c[6:9], la_c[9:]
-
-        c3 = (C_n_damp @ B_n_damp - B_gamma_dot) * Le
-        c4 = (C_m_damp @ B_m_damp - B_kappa_dot) * Le
-
-        return jnp.concatenate([c12, c3, c4])
-
-    @staticmethod
-    @jit
-    def _c_q_el(qe, Le):
-        A_IB_qe, B_gamma_qe, B_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
-        return jnp.concatenate([B_gamma_qe, B_kappa_qe], axis=0) * (-Le)
-
-    @staticmethod
-    @jit
-    def _c_damp_q_el(qe, ue, Le):
-        A_IB_qe, B_gamma_qe, B_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
-        B_gamma_dot_qe, B_kappa_dot_qe = DiscreteRod._eval_dot_q_el(qe, ue, Le)
-        return jnp.concatenate(
-            [B_gamma_qe, B_kappa_qe, B_gamma_dot_qe, B_kappa_dot_qe], axis=0
-        ) * (-Le)
-
-    @staticmethod
-    @jit
-    def _c_damp_u_el(qe, ue, Le):
-        B_gamma_dot_ue, B_kappa_dot_ue = DiscreteRod._eval_dot_u_el(qe, ue, Le)
-        return jnp.concatenate(
-            [jnp.zeros((6, 12)), B_gamma_dot_ue, B_kappa_dot_ue], axis=0
-        ) * (-Le)
-
-    @staticmethod
-    @jit
-    def _W_c_el(qe, Le):
-        A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
-        s1 = 0.5 * Le * math_jax.ax2skew(B_gamma)
-        s2 = 0.5 * Le * math_jax.ax2skew(B_kappa)
-
-        row1 = jnp.concatenate([A_IB, Z3], axis=1)
-        row2 = jnp.concatenate([s1, E3 + s2], axis=1)
-        row3 = jnp.concatenate([-A_IB, Z3], axis=1)
-        row4 = jnp.concatenate([s1, -E3 + s2], axis=1)
-
-        return jnp.concatenate([row1, row2, row3, row4], axis=0)
-
-    @staticmethod
-    @jit
-    def _W_c_damp_el(qe, Le):
-        W_c_el = DiscreteRod._W_c_el(qe, Le)
-        return jnp.concatenate([W_c_el, W_c_el], axis=1)
-
-    @staticmethod
-    @jit
-    def _Wla_c_q_el(qe, la_c, Le):
-        A_IB_qe, B_gamma_qe, B_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
-        B_n = la_c[:3]
-        B_m = la_c[3:]
-
-        A_IB_B_n__qe = B_n @ A_IB_qe
-
-        common = (
-            -0.5
-            * Le
-            * (
-                jnp.cross(B_n[:, None], B_gamma_qe, axis=0)
-                + jnp.cross(B_m[:, None], B_kappa_qe, axis=0)
-            )
-        )
-
-        return jnp.concatenate([A_IB_B_n__qe, common, -A_IB_B_n__qe, common], axis=0)
-
-    @staticmethod
-    @jit
-    def _Wla_c_q_damp_el(qe, la_c, Le):
-        _la_c = la_c[:6] + la_c[6:]
-        return DiscreteRod._Wla_c_q_el(qe, _la_c, Le)
-
-    @staticmethod
-    @jit
-    def _eval_common(qe, Le):
-        inv_Le = 1.0 / Le
-
-        r_OC0 = qe[:3]
-        r_OC1 = qe[7:10]
-        P0 = qe[3:7]
-        P1 = qe[10:14]
-
-        r_OC_s = (r_OC1 - r_OC0) * inv_Le
-
-        P = 0.5 * (P0 + P1)
-        P_s = (P1 - P0) * inv_Le
-
-        A_IB = math_jax.Exp_SO3_quat_norm(P)
-        T = math_jax.T_SO3_quat_norm(P)
-
-        return r_OC_s, P, P_s, A_IB, T
-
-    @staticmethod
-    @jit
-    def _eval_dot_common(ue, Le):
-        inv_Le = 1.0 / Le
-
-        v_C0 = ue[:3]
-        v_C1 = ue[6:9]
-        B_Omega_0 = ue[3:6]
-        B_Omega_1 = ue[9:12]
-
-        v_C_s = (v_C1 - v_C0) * inv_Le
-
-        B_Omega = 0.5 * (B_Omega_0 + B_Omega_1)
-        B_Omega_s = (B_Omega_1 - B_Omega_0) * inv_Le
-
-        return v_C_s, B_Omega, B_Omega_s
-
-    @staticmethod
-    @jit
-    def _eval_el(qe, Le):
-        r_OC_s, P, P_s, A_IB, T = DiscreteRod._eval_common(qe, Le)
-
-        B_gamma = A_IB.T @ r_OC_s
-        B_kappa = T @ P_s
-
-        return A_IB, B_gamma, B_kappa
-
-    @staticmethod
-    @jit
-    def _eval_q_el(qe, Le):
-        r_OC_s, P, P_s, A_IB, T = DiscreteRod._eval_common(qe, Le)
-        inv_Le = 1.0 / Le
-
-        # A_IB_qe
-        A_P_2 = 0.5 * math_jax.Exp_SO3_quat_P_norm(P)
-        A_IB_qe = jnp.concatenate(
-            [jnp.zeros((3, 3, 3)), A_P_2, jnp.zeros((3, 3, 3)), A_P_2],
-            axis=-1,
-        )  # (3,3,14)
-
-        # T_qe
-        T_P_2 = 0.5 * math_jax.T_SO3_quat_P_norm(P)  # (3,4,4)
-        T_qe = jnp.concatenate(
-            [jnp.zeros((3, 4, 3)), T_P_2, jnp.zeros((3, 4, 3)), T_P_2],
-            axis=-1,
-        )  # (3,4,14)
-
-        # B_gamma_qe <- B_gamma = A_IB.T @ r_OC_s
-        A_IB_T = A_IB.T
-        A_IB_T__r_OC_s_qe = (
-            jnp.concatenate([-A_IB_T, Z34, A_IB_T, Z34], axis=1) * inv_Le
-        )
-        B_gamma_qe = jnp.tensordot(A_IB_qe, r_OC_s, axes=[[0], [0]]) + A_IB_T__r_OC_s_qe
-
-        # B_kappa_qe <- B_kappa = T @ P_s
-        T__P_s_qe = jnp.concatenate([Z3, -T, Z3, T], axis=1) * inv_Le
-        B_kappa_qe = jnp.tensordot(T_qe, P_s, axes=[[1], [0]]) + T__P_s_qe
-
-        return A_IB_qe, B_gamma_qe, B_kappa_qe
-
-    @staticmethod
-    @jit
-    def _eval_dot_el(qe, ue, Le):
-        A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
-        v_C_s, B_Omega, B_Omega_s = DiscreteRod._eval_dot_common(ue, Le)
-
-        B_gamma_dot = A_IB.T @ v_C_s - math_jax.cross3(B_Omega, B_gamma)
-        B_kappa_dot = B_Omega_s - math_jax.cross3(B_Omega, B_kappa)
-
-        return B_gamma_dot, B_kappa_dot
-
-    @staticmethod
-    @jit
-    def _eval_dot_q_el(qe, ue, Le):
-        A_IB_qe, B_gamma_qe, B_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
-
-        v_C_s, B_Omega, B_Omega_s = DiscreteRod._eval_dot_common(ue, Le)
-
-        B_gamma_dot_qe = (
-            jnp.tensordot(A_IB_qe, v_C_s, axes=[[0], [0]])
-            - math_jax.ax2skew(B_Omega) @ B_gamma_qe
-        )
-        B_kappa_dot_qe = -math_jax.ax2skew(B_Omega) @ B_kappa_qe
-
-        return B_gamma_dot_qe, B_kappa_dot_qe
-
-    # TODO: analytical function
-    _eval_dot_u_el = jit(jacrev(_eval_dot_el.__func__, argnums=1))
-
-    _q_dot_nodes = jit(vmap(_q_dot_node.__func__))
-    _p_dot_p_nodes = jit(vmap(_p_dot_p_node.__func__))
-
-    _h_nodes = jit(vmap(_h_node.__func__))
-    _h_u_nodes = jit(vmap(_h_u_node.__func__))
-
-    _la_c_els = jit(vmap(_la_c_el.__func__))
-    _la_c_damp_els = jit(vmap(_la_c_damp_el.__func__))
-    _c_els = jit(vmap(_c_el.__func__))
-    _c_damp_els = jit(vmap(_c_damp_el.__func__))
-    _c_q_els = jit(vmap(_c_q_el.__func__))
-    _c_damp_q_els = jit(vmap(_c_damp_q_el.__func__))
-    _c_damp_u_els = jit(vmap(_c_damp_u_el.__func__))
-    _W_c_els = jit(vmap(_W_c_el.__func__))
-    _W_c_damp_els = jit(vmap(_W_c_damp_el.__func__))
-    _Wla_c_q_els = jit(vmap(_Wla_c_q_el.__func__))
-    _Wla_c_q_damp_els = jit(vmap(_Wla_c_q_damp_el.__func__))
-    _eval_els = jit(vmap(_eval_el.__func__))
-    _eval_q_els = jit(vmap(_eval_q_el.__func__))
-
     def __init__(
         self,
         cross_section,
@@ -507,6 +228,7 @@ class DiscreteRod:
         name="discrete_rod",
         damping_ratio=0.0,
     ):
+        self._jaxed = True
         self.cross_section = cross_section
         self.material_model = material_model
         self.nelement = nelement
@@ -593,135 +315,73 @@ class DiscreteRod:
 
         self.__init_coo__(cross_section_inertias)
 
-        # add derivative c_u
-        if self._damping:
-
-            def c_u(t, q, u, la_c):
-                self._c_u_coo.data = self._c_u(q, u).__array__().ravel()
-                return self._c_u_coo
-
-            self.c_u = c_u
-
     def __jit_func__(self):
         self._eval = jit(
             lambda q: DiscreteRod._eval_els(DiscreteRod._gen_element_q(q), self.L_els)
         )
 
-        self._q_dot = jit(
-            lambda q, u: DiscreteRod._q_dot_nodes(
-                q.reshape((-1, 7)), u.reshape((-1, 6))
-            )
-        )
+        self.q_dot = jit(self._q_dot)
 
-        self._q_dot_q = jit(
-            lambda q, u: DiscreteRod._p_dot_p_nodes(
-                q.reshape((-1, 7)), u.reshape((-1, 6))
-            )
-        )
+        _q_dot_q = jit(self._q_dot_q)
 
-        self._h = jit(
-            lambda u: DiscreteRod._h_nodes(u.reshape((-1, 6)), self._B_Theta_C)
-        )
+        def q_dot_q(t, q, u):
+            self._q_dot_q_coo.data = _q_dot_q(t, q, u)
+            return self._q_dot_q_coo
 
-        self._h_u = jit(
-            lambda u: DiscreteRod._h_u_nodes(u.reshape((-1, 6))[:, 3:], self._B_Theta_C)
-        )
+        self.q_dot_q = q_dot_q
 
-        self._la_c = jit(
-            lambda q, u: (
-                DiscreteRod._la_c_els(
-                    DiscreteRod._gen_element_q(q),
-                    self.L_els,
-                    self.B_gamma0,
-                    self.B_kappa0,
-                    self.K_ga_els,
-                    self.K_ka_els,
-                )
-                if not self._damping
-                else DiscreteRod._la_c_damp_els(
-                    DiscreteRod._gen_element_q(q),
-                    DiscreteRod._gen_element_u(u),
-                    self.L_els,
-                    self.B_gamma0,
-                    self.B_kappa0,
-                    self.K_ga_els,
-                    self.K_ka_els,
-                    self.K_ga_damp_els,
-                    self.K_ka_damp_els,
-                )
-            )
-        )
+        self.h = jit(self._h)
 
-        self._c = jit(
-            lambda q, u, la_c: (
-                DiscreteRod._c_els(
-                    DiscreteRod._gen_element_q(q),
-                    la_c.reshape((self.nelement, -1)),
-                    self.L_els,
-                    self.B_gamma0,
-                    self.B_kappa0,
-                    self.C_n_els,
-                    self.C_m_els,
-                )
-                if not self._damping
-                else DiscreteRod._c_damp_els(
-                    DiscreteRod._gen_element_q(q),
-                    DiscreteRod._gen_element_u(u),
-                    la_c.reshape((self.nelement, -1)),
-                    self.L_els,
-                    self.B_gamma0,
-                    self.B_kappa0,
-                    self.C_n_els,
-                    self.C_m_els,
-                    self.C_n_damp_els,
-                    self.C_m_damp_els,
-                )
-            )
-        )
+        _h_u = jit(self._h_u)
 
-        self._c_q = jit(
-            lambda q, u: (
-                DiscreteRod._c_q_els(DiscreteRod._gen_element_q(q), self.L_els)
-                if not self._damping
-                else DiscreteRod._c_damp_q_els(
+        def h_u(t, q, u):
+            self._h_u_coo.data = _h_u(t, q, u)
+            return self._h_u_coo
+
+        self.h_u = h_u
+
+        self.la_c = jit(self._la_c)
+
+        self.c = jit(self._c)
+
+        _c_q = jit(self._c_q)
+
+        def c_q(t, q, u, la_c):
+            self._c_q_coo.data = _c_q(t, q, u, la_c)
+            return self._c_q_coo
+
+        self.c_q = c_q
+
+        if self._damping:
+            _c_u = jit(
+                lambda q, u: DiscreteRod._c_damp_u_els(
                     DiscreteRod._gen_element_q(q),
                     DiscreteRod._gen_element_u(u),
                     self.L_els,
-                )
+                ).ravel()
             )
-        )
 
-        self._c_u = jit(
-            lambda q, u: DiscreteRod._c_damp_u_els(
-                DiscreteRod._gen_element_q(q), DiscreteRod._gen_element_u(u), self.L_els
-            )
-        )
+            def c_u(t, q, u, la_c):
+                self._c_u_coo.data = _c_u(q, u)
+                return self._c_u_coo
 
-        self._W_c = jit(
-            lambda q: (
-                DiscreteRod._W_c_els(DiscreteRod._gen_element_q(q), self.L_els)
-                if not self._damping
-                else DiscreteRod._W_c_damp_els(
-                    DiscreteRod._gen_element_q(q), self.L_els
-                )
-            )
-        )
+            self.c_u = c_u
 
-        self._Wla_c_q = jit(
-            lambda q, la_c: (
-                DiscreteRod._Wla_c_q_els(
-                    DiscreteRod._gen_element_q(q),
-                    la_c.reshape((self.nelement, -1)),
-                    self.L_els,
-                )
-                if not self._damping
-                else DiscreteRod._Wla_c_q_damp_els(
-                    DiscreteRod._gen_element_q(q),
-                    la_c.reshape((self.nelement, -1)),
-                    self.L_els,
-                )
-            )
-        )
+        _W_c = jit(self._W_c)
+
+        def W_c(t, q):
+            self._W_c_coo.data = _W_c(t, q)
+            return self._W_c_coo
+
+        self.W_c = W_c
+
+        _Wla_c_q = jit(self._Wla_c_q)
+
+        def Wla_c_q(t, q, la_c):
+            self._Wla_c_q_coo.data = _Wla_c_q(t, q, la_c)
+            return self._Wla_c_q_coo
+
+        self.Wla_c_q = Wla_c_q
 
     def __init_coo__(self, cross_section_inertias):
         # M
@@ -820,9 +480,146 @@ class DiscreteRod:
             self.nodalDOF_p,
         )
 
+    @staticmethod
+    @jit
+    def _gen_element_q(q):
+        nelement = q.shape[0] // 7 - 1
+        q_nodes = q[: (nelement + 1) * 7].reshape(nelement + 1, 7)
+        return jnp.concatenate([q_nodes[:-1], q_nodes[1:]], axis=1)  # (nelement, 14)
+
+    @staticmethod
+    @jit
+    def _gen_element_u(u):
+        nelement = u.shape[0] // 6 - 1
+        u_nodes = u[: (nelement + 1) * 6].reshape(nelement + 1, 6)
+        return jnp.concatenate([u_nodes[:-1], u_nodes[1:]], axis=1)  # (nelement, 12)
+
+    @staticmethod
+    @jit
+    def _c_damp_u_el(qe, ue, Le):
+        B_gamma_dot_ue, B_kappa_dot_ue = DiscreteRod._eval_dot_u_el(qe, ue, Le)
+        return jnp.concatenate(
+            [jnp.zeros((6, 12)), B_gamma_dot_ue, B_kappa_dot_ue], axis=0
+        ) * (-Le)
+
+    _c_damp_u_els = jit(vmap(_c_damp_u_el.__func__))
+
+    @staticmethod
+    @jit
+    def _eval_common(qe, Le):
+        inv_Le = 1.0 / Le
+
+        r_OC0 = qe[:3]
+        r_OC1 = qe[7:10]
+        P0 = qe[3:7]
+        P1 = qe[10:14]
+
+        r_OC_s = (r_OC1 - r_OC0) * inv_Le
+
+        P = 0.5 * (P0 + P1)
+        P_s = (P1 - P0) * inv_Le
+
+        A_IB = math_jax.Exp_SO3_quat_norm(P)
+        T = math_jax.T_SO3_quat_norm(P)
+
+        return r_OC_s, P, P_s, A_IB, T
+
+    @staticmethod
+    @jit
+    def _eval_dot_common(ue, Le):
+        inv_Le = 1.0 / Le
+
+        v_C0 = ue[:3]
+        v_C1 = ue[6:9]
+        B_Omega_0 = ue[3:6]
+        B_Omega_1 = ue[9:12]
+
+        v_C_s = (v_C1 - v_C0) * inv_Le
+
+        B_Omega = 0.5 * (B_Omega_0 + B_Omega_1)
+        B_Omega_s = (B_Omega_1 - B_Omega_0) * inv_Le
+
+        return v_C_s, B_Omega, B_Omega_s
+
+    @staticmethod
+    @jit
+    def _eval_el(qe, Le):
+        r_OC_s, P, P_s, A_IB, T = DiscreteRod._eval_common(qe, Le)
+
+        B_gamma = A_IB.T @ r_OC_s
+        B_kappa = T @ P_s
+
+        return A_IB, B_gamma, B_kappa
+
+    _eval_els = jit(vmap(_eval_el.__func__))
+
+    @staticmethod
+    @jit
+    def _eval_q_el(qe, Le):
+        r_OC_s, P, P_s, A_IB, T = DiscreteRod._eval_common(qe, Le)
+        inv_Le = 1.0 / Le
+
+        # A_IB_qe
+        A_P_2 = 0.5 * math_jax.Exp_SO3_quat_P_norm(P)
+        A_IB_qe = jnp.concatenate(
+            [jnp.zeros((3, 3, 3)), A_P_2, jnp.zeros((3, 3, 3)), A_P_2],
+            axis=-1,
+        )  # (3,3,14)
+
+        # T_qe
+        T_P_2 = 0.5 * math_jax.T_SO3_quat_P_norm(P)  # (3,4,4)
+        T_qe = jnp.concatenate(
+            [jnp.zeros((3, 4, 3)), T_P_2, jnp.zeros((3, 4, 3)), T_P_2],
+            axis=-1,
+        )  # (3,4,14)
+
+        # B_gamma_qe <- B_gamma = A_IB.T @ r_OC_s
+        A_IB_T = A_IB.T
+        A_IB_T__r_OC_s_qe = (
+            jnp.concatenate([-A_IB_T, Z34, A_IB_T, Z34], axis=1) * inv_Le
+        )
+        B_gamma_qe = jnp.tensordot(A_IB_qe, r_OC_s, axes=[[0], [0]]) + A_IB_T__r_OC_s_qe
+
+        # B_kappa_qe <- B_kappa = T @ P_s
+        T__P_s_qe = jnp.concatenate([Z3, -T, Z3, T], axis=1) * inv_Le
+        B_kappa_qe = jnp.tensordot(T_qe, P_s, axes=[[1], [0]]) + T__P_s_qe
+
+        return A_IB_qe, B_gamma_qe, B_kappa_qe
+
+    _eval_q_els = jit(vmap(_eval_q_el.__func__))
+
+    @staticmethod
+    @jit
+    def _eval_dot_el(qe, ue, Le):
+        A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
+        v_C_s, B_Omega, B_Omega_s = DiscreteRod._eval_dot_common(ue, Le)
+
+        B_gamma_dot = A_IB.T @ v_C_s - math_jax.cross3(B_Omega, B_gamma)
+        B_kappa_dot = B_Omega_s - math_jax.cross3(B_Omega, B_kappa)
+
+        return B_gamma_dot, B_kappa_dot
+
+    @staticmethod
+    @jit
+    def _eval_dot_q_el(qe, ue, Le):
+        A_IB_qe, B_gamma_qe, B_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
+
+        v_C_s, B_Omega, B_Omega_s = DiscreteRod._eval_dot_common(ue, Le)
+
+        B_gamma_dot_qe = (
+            jnp.tensordot(A_IB_qe, v_C_s, axes=[[0], [0]])
+            - math_jax.ax2skew(B_Omega) @ B_gamma_qe
+        )
+        B_kappa_dot_qe = -math_jax.ax2skew(B_Omega) @ B_kappa_qe
+
+        return B_gamma_dot_qe, B_kappa_dot_qe
+
+    # TODO: analytical function
+    _eval_dot_u_el = jit(jacrev(_eval_dot_el.__func__, argnums=1))
+
     def _element_number(self, xi):
-        num = int(xi * self.nelement)
-        return num if num < self.nelement else num - 1
+        num = jnp.int64(xi * self.nelement)
+        return num - jnp.int64(num >= self.nelement)
 
     def _view_element_q(self, q):
         stride = q.strides[0]
@@ -837,10 +634,10 @@ class DiscreteRod:
     def _view_nodal_u(self, u):
         return u.reshape((self.nnode, 6))
 
-    def nodes(self, q):
-        """Returns nodal position coordinates"""
-        q_body = q[self.qDOF]
-        return np.array([q_body[nodalDOF] for nodalDOF in self.nodalDOF_r]).T
+    # def nodes(self, q):
+    #     """Returns nodal position coordinates"""
+    #     q_body = q[self.qDOF]
+    #     return np.array([q_body[nodalDOF] for nodalDOF in self.nodalDOF_r]).T
 
     @staticmethod
     def straight_configuration(
@@ -866,8 +663,8 @@ class DiscreteRod:
         r_OP_xixi,
         xi1,
         alpha=0.0,
-        r_OP0=np.zeros(3, dtype=float),
-        A_IB0=np.eye(3, dtype=float),
+        r_OP0=jnp.zeros(3, dtype=float),
+        A_IB0=jnp.eye(3, dtype=float),
     ):
         """Compute generalized position coordinates for a pre-curved rod along curve r_OP. The cross-section orientations are based on the Serret-Frenet equations and afterwards rotated by alpha."""
         nnodes_r = nelement + 1
@@ -905,8 +702,8 @@ class DiscreteRod:
         nelement,
         B0_r_C0Ci,
         A_B0Bi,
-        r_OC0=np.zeros(3, dtype=float),
-        A_IB0=np.eye(3, dtype=float),
+        r_OC0=jnp.zeros(3, dtype=float),
+        A_IB0=jnp.eye(3, dtype=float),
     ):
         """Compute generalized position coordinates for a pre-curved rod with centerline curve r_OP and orientation of A_IB."""
         nnodes_r = nelement + 1
@@ -936,12 +733,28 @@ class DiscreteRod:
     #####################
     # kinematic equations
     #####################
-    def q_dot(self, t, q, u):
-        return self._q_dot(q, u).__array__().ravel()
+    @staticmethod
+    @jit
+    def _q_dot_node(q, u):
+        T = math_jax.T_SO3_inv_quat(q[3:]) @ u[3:]
+        return jnp.concatenate([u[:3], T])
 
-    def q_dot_q(self, t, q, u):
-        self._q_dot_q_coo.data = self._q_dot_q(q, u).__array__().ravel()
-        return self._q_dot_q_coo
+    _q_dot_nodes = jit(vmap(_q_dot_node.__func__))
+
+    def _q_dot(self, t, q, u):
+        return DiscreteRod._q_dot_nodes(q.reshape((-1, 7)), u.reshape((-1, 6))).ravel()
+
+    @staticmethod
+    @jit
+    def _p_dot_p_node(q, u):
+        return u[3:] @ math_jax.T_SO3_inv_quat_P(q[3:])
+
+    _p_dot_p_nodes = jit(vmap(_p_dot_p_node.__func__))
+
+    def _q_dot_q(self, t, q, u):
+        return DiscreteRod._p_dot_p_nodes(
+            q.reshape((-1, 7)), u.reshape((-1, 6))
+        ).ravel()
 
     def q_dot_u(self, t, q):
         T_SO3_inv_quat_nodes = math_jax.T_SO3_inv_quat_batch(
@@ -965,12 +778,33 @@ class DiscreteRod:
     def M(self, t, q):
         return self._M_coo
 
-    def h(self, t, q, u):
-        return self._h(u).__array__().ravel()
+    @staticmethod
+    @jit
+    def _h_node(u, B_Theta_C):
+        B_omega_IB = u[3:]
+        tmp = B_Theta_C @ B_omega_IB
+        cross = math_jax.cross3(tmp, B_omega_IB)
+        return jnp.pad(cross, (3, 0))
 
-    def h_u(self, t, q, u):
-        self._h_u_coo.data = self._h_u(u).__array__().ravel()
-        return self._h_u_coo
+    _h_nodes = jit(vmap(_h_node.__func__))
+
+    def _h(self, t, q, u):
+        return DiscreteRod._h_nodes(u.reshape((-1, 6)), self._B_Theta_C).ravel()
+
+    @staticmethod
+    @jit
+    def _h_u_node(B_omega_IB, B_Theta_C):
+        return (
+            math_jax.ax2skew(B_Theta_C @ B_omega_IB)
+            - math_jax.ax2skew(B_omega_IB) @ B_Theta_C
+        )
+
+    _h_u_nodes = jit(vmap(_h_u_node.__func__))
+
+    def _h_u(self, t, q, u):
+        return DiscreteRod._h_u_nodes(
+            u.reshape((-1, 6))[:, 3:], self._B_Theta_C
+        ).ravel()
 
     #####################################################
     # stabilization conditions for the kinematic equation
@@ -987,31 +821,219 @@ class DiscreteRod:
     ############
     # compliance
     ############
-    def la_c(self, t, q, u):
-        return self._la_c(q, u).__array__().ravel()
+    @staticmethod
+    @jit
+    def _la_c_el(qe, Le, B_gamma0, B_kappa0, K_ga, K_ka):
+        A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
+        B_n = K_ga @ (B_gamma - B_gamma0)
+        B_m = K_ka @ (B_kappa - B_kappa0)
+        return jnp.concatenate([B_n, B_m])
 
-    def c(self, t, q, u, la_c):
-        return self._c(q, u, la_c).__array__().ravel()
+    _la_c_els = jit(vmap(_la_c_el.__func__))
+
+    @staticmethod
+    @jit
+    def _la_c_damp_el(qe, ue, Le, B_gamma0, B_kappa0, K_ga, K_ka, K_ga_damp, K_ka_damp):
+        la_c_12 = DiscreteRod._la_c_el(qe, Le, B_gamma0, B_kappa0, K_ga, K_ka)
+        B_gamma_dot, B_kappa_dot = DiscreteRod._eval_dot_el(qe, ue, Le)
+        B_n_damp = K_ga_damp @ B_gamma_dot
+        B_m_damp = K_ka_damp @ B_kappa_dot
+        return jnp.concatenate([la_c_12, B_n_damp, B_m_damp])
+
+    _la_c_damp_els = jit(vmap(_la_c_damp_el.__func__))
+
+    def _la_c(self, t, q, u):
+        return (
+            DiscreteRod._la_c_els(
+                DiscreteRod._gen_element_q(q),
+                self.L_els,
+                self.B_gamma0,
+                self.B_kappa0,
+                self.K_ga_els,
+                self.K_ka_els,
+            ).ravel()
+            if not self._damping
+            else DiscreteRod._la_c_damp_els(
+                DiscreteRod._gen_element_q(q),
+                DiscreteRod._gen_element_u(u),
+                self.L_els,
+                self.B_gamma0,
+                self.B_kappa0,
+                self.K_ga_els,
+                self.K_ka_els,
+                self.K_ga_damp_els,
+                self.K_ka_damp_els,
+            ).ravel()
+        )
+
+    @staticmethod
+    @jit
+    def _c_el(qe, la_c, Le, B_gamma0, B_kappa0, C_n, C_m):
+        A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
+        B_n, B_m = la_c[:3], la_c[3:]
+
+        c1 = (C_n @ B_n - (B_gamma - B_gamma0)) * Le
+        c2 = (C_m @ B_m - (B_kappa - B_kappa0)) * Le
+
+        return jnp.concatenate([c1, c2])
+
+    _c_els = jit(vmap(_c_el.__func__))
+
+    @staticmethod
+    @jit
+    def _c_damp_el(qe, ue, la_c, Le, B_gamma0, B_kappa0, C_n, C_m, C_n_damp, C_m_damp):
+        c12 = DiscreteRod._c_el(qe, la_c[:6], Le, B_gamma0, B_kappa0, C_n, C_m)
+        B_gamma_dot, B_kappa_dot = DiscreteRod._eval_dot_el(qe, ue, Le)
+        B_n_damp, B_m_damp = la_c[6:9], la_c[9:]
+
+        c3 = (C_n_damp @ B_n_damp - B_gamma_dot) * Le
+        c4 = (C_m_damp @ B_m_damp - B_kappa_dot) * Le
+
+        return jnp.concatenate([c12, c3, c4])
+
+    _c_damp_els = jit(vmap(_c_damp_el.__func__))
+
+    def _c(self, t, q, u, la_c):
+        return (
+            DiscreteRod._c_els(
+                DiscreteRod._gen_element_q(q),
+                la_c.reshape((self.nelement, -1)),
+                self.L_els,
+                self.B_gamma0,
+                self.B_kappa0,
+                self.C_n_els,
+                self.C_m_els,
+            ).ravel()
+            if not self._damping
+            else DiscreteRod._c_damp_els(
+                DiscreteRod._gen_element_q(q),
+                DiscreteRod._gen_element_u(u),
+                la_c.reshape((self.nelement, -1)),
+                self.L_els,
+                self.B_gamma0,
+                self.B_kappa0,
+                self.C_n_els,
+                self.C_m_els,
+                self.C_n_damp_els,
+                self.C_m_damp_els,
+            ).ravel()
+        )
 
     def c_la_c(self):
         return self._c_la_c_coo
 
-    def c_q(self, t, q, u, la_c):
-        self._c_q_coo.data = self._c_q(q, u).__array__().ravel()
-        return self._c_q_coo
+    @staticmethod
+    @jit
+    def _c_q_el(qe, Le):
+        A_IB_qe, B_gamma_qe, B_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
+        return jnp.concatenate([B_gamma_qe, B_kappa_qe], axis=0) * (-Le)
 
-    def W_c(self, t, q):
-        self._W_c_coo.data = self._W_c(q).__array__().ravel()
-        return self._W_c_coo
+    _c_q_els = jit(vmap(_c_q_el.__func__))
 
-    def Wla_c_q(self, t, q, la_c):
-        self._Wla_c_q_coo.data = self._Wla_c_q(q, la_c).__array__().ravel()
-        return self._Wla_c_q_coo
+    @staticmethod
+    @jit
+    def _c_damp_q_el(qe, ue, Le):
+        A_IB_qe, B_gamma_qe, B_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
+        B_gamma_dot_qe, B_kappa_dot_qe = DiscreteRod._eval_dot_q_el(qe, ue, Le)
+        return jnp.concatenate(
+            [B_gamma_qe, B_kappa_qe, B_gamma_dot_qe, B_kappa_dot_qe], axis=0
+        ) * (-Le)
 
-    # @cachedmethod(lambda self: self._alpha_cache, key=lambda self, xi: xi)
+    _c_damp_q_els = jit(vmap(_c_damp_q_el.__func__))
+
+    def _c_q(self, t, q, u, la_c):
+        return (
+            DiscreteRod._c_q_els(DiscreteRod._gen_element_q(q), self.L_els).ravel()
+            if not self._damping
+            else DiscreteRod._c_damp_q_els(
+                DiscreteRod._gen_element_q(q),
+                DiscreteRod._gen_element_u(u),
+                self.L_els,
+            ).ravel()
+        )
+
+    @staticmethod
+    @jit
+    def _W_c_el(qe, Le):
+        A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
+        s1 = 0.5 * Le * math_jax.ax2skew(B_gamma)
+        s2 = 0.5 * Le * math_jax.ax2skew(B_kappa)
+
+        row1 = jnp.concatenate([A_IB, Z3], axis=1)
+        row2 = jnp.concatenate([s1, E3 + s2], axis=1)
+        row3 = jnp.concatenate([-A_IB, Z3], axis=1)
+        row4 = jnp.concatenate([s1, -E3 + s2], axis=1)
+
+        return jnp.concatenate([row1, row2, row3, row4], axis=0)
+
+    _W_c_els = jit(vmap(_W_c_el.__func__))
+
+    @staticmethod
+    @jit
+    def _W_c_damp_el(qe, Le):
+        W_c_el = DiscreteRod._W_c_el(qe, Le)
+        return jnp.concatenate([W_c_el, W_c_el], axis=1)
+
+    _W_c_damp_els = jit(vmap(_W_c_damp_el.__func__))
+
+    def _W_c(self, t, q):
+        return (
+            DiscreteRod._W_c_els(DiscreteRod._gen_element_q(q), self.L_els).ravel()
+            if not self._damping
+            else DiscreteRod._W_c_damp_els(
+                DiscreteRod._gen_element_q(q), self.L_els
+            ).ravel()
+        )
+
+    @staticmethod
+    @jit
+    def _Wla_c_q_el(qe, la_c, Le):
+        A_IB_qe, B_gamma_qe, B_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
+        B_n = la_c[:3]
+        B_m = la_c[3:]
+
+        A_IB_B_n__qe = B_n @ A_IB_qe
+
+        common = (
+            -0.5
+            * Le
+            * (
+                jnp.cross(B_n[:, None], B_gamma_qe, axis=0)
+                + jnp.cross(B_m[:, None], B_kappa_qe, axis=0)
+            )
+        )
+
+        return jnp.concatenate([A_IB_B_n__qe, common, -A_IB_B_n__qe, common], axis=0)
+
+    _Wla_c_q_els = jit(vmap(_Wla_c_q_el.__func__))
+
+    @staticmethod
+    @jit
+    def _Wla_c_q_damp_el(qe, la_c, Le):
+        _la_c = la_c[:6] + la_c[6:]
+        return DiscreteRod._Wla_c_q_el(qe, _la_c, Le)
+
+    _Wla_c_q_damp_els = jit(vmap(_Wla_c_q_damp_el.__func__))
+
+    def _Wla_c_q(self, t, q, la_c):
+        return (
+            DiscreteRod._Wla_c_q_els(
+                DiscreteRod._gen_element_q(q),
+                la_c.reshape((self.nelement, -1)),
+                self.L_els,
+            ).ravel()
+            if not self._damping
+            else DiscreteRod._Wla_c_q_damp_els(
+                DiscreteRod._gen_element_q(q),
+                la_c.reshape((self.nelement, -1)),
+                self.L_els,
+            ).ravel()
+        )
+
     def _alpha(self, xi):
         num = self._element_number(xi)
-        return (xi - self.xi_node[num]) / (self.xi_node[num + 1] - self.xi_node[num])
+        xi_node = jnp.array(self.xi_node)
+        return (xi - xi_node[num]) / (xi_node[num + 1] - xi_node[num])
 
     ####################################################
     # interactions with other bodies and the environment
@@ -1027,61 +1049,59 @@ class DiscreteRod:
     ##########################
     # r_OP / A_IB contribution
     ##########################
-    def r_OP(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
+    def r_OP(self, t, qe, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.r_OP(alpha, qe, B_r_CP).__array__()
+        return ElementKinematics.r_OP(alpha, qe, B_r_CP)
 
-    def r_OP_q(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
+    def r_OP_q(self, t, qe, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.r_OP_q(alpha, qe, B_r_CP).__array__()
+        return ElementKinematics.r_OP_q(alpha, qe, B_r_CP)
 
-    def v_P(self, t, qe, ue, xi, B_r_CP=np.zeros(3, dtype=float)):
+    def v_P(self, t, qe, ue, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.v_P(alpha, qe, ue, B_r_CP).__array__()
+        return ElementKinematics.v_P(alpha, qe, ue, B_r_CP)
 
-    def v_P_q(self, t, qe, ue, xi, B_r_CP=np.zeros(3, dtype=float)):
+    def v_P_q(self, t, qe, ue, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.v_P_q(alpha, qe, ue, B_r_CP).__array__()
+        return ElementKinematics.v_P_q(alpha, qe, ue, B_r_CP)
 
-    def J_P(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
+    def J_P(self, t, qe, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.J_P(alpha, qe, B_r_CP).__array__()
+        return ElementKinematics.J_P(alpha, qe, B_r_CP)
 
-    def J_P_q(self, t, qe, xi, B_r_CP=np.zeros(3, dtype=float)):
+    def J_P_q(self, t, qe, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.J_P_q(alpha, qe, B_r_CP).__array__()
+        return ElementKinematics.J_P_q(alpha, qe, B_r_CP)
 
-    def a_P(self, t, qe, ue, ue_dot, xi, B_r_CP=np.zeros(3, dtype=float)):
+    def a_P(self, t, qe, ue, ue_dot, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.a_P(alpha, qe, ue, ue_dot, B_r_CP).__array__()
+        return ElementKinematics.a_P(alpha, qe, ue, ue_dot, B_r_CP)
 
     def A_IB(self, t, qe, xi):
         alpha = self._alpha(xi)
-        return ElementKinematics.A_IB(alpha, qe).__array__()
+        return ElementKinematics.A_IB(alpha, qe)
 
     def A_IB_q(self, t, qe, xi):
         alpha = self._alpha(xi)
-        return ElementKinematics.A_IB_q(alpha, qe).__array__()
+        return ElementKinematics.A_IB_q(alpha, qe)
 
     def B_Omega(self, t, qe, ue, xi):
         alpha = self._alpha(xi)
-        return ElementKinematics.B_Omega(alpha, ue).__array__()
+        return ElementKinematics.B_Omega(alpha, ue)
 
     def B_Omega_q(self, t, qe, ue, xi):
-        alpha = self._alpha(xi)
         return ElementKinematics.B_Omega_q
 
     def B_J_R(self, t, qe, xi):
         alpha = self._alpha(xi)
-        return ElementKinematics.B_J_R(alpha).__array__()
+        return ElementKinematics.B_J_R(alpha)
 
     def B_J_R_q(self, t, qe, xi):
-        alpha = self._alpha(xi)
         return ElementKinematics.B_J_R_q
 
     def B_Psi(self, t, qe, ue, ue_dot, xi):
         alpha = self._alpha(xi)
-        return ElementKinematics.B_Psi(alpha, ue_dot).__array__()
+        return ElementKinematics.B_Psi(alpha, ue_dot)
 
     def B_Psi_q(self, t, qe, ue, ue_dot, xi):
         return ElementKinematics.B_Psi_q

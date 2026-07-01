@@ -1,5 +1,6 @@
 from numpy import einsum, zeros
 from vtk import VTK_VERTEX
+from jax import jit, numpy as jnp
 
 
 class Force:
@@ -31,6 +32,11 @@ class Force:
         self.J_P = lambda t, q: subsystem.J_P(t, q, xi, B_r_CP)
         self.J_P_q = lambda t, q: subsystem.J_P_q(t, q, xi, B_r_CP)
 
+        self._jaxed = subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
+
+        self.h = jit(self._h) if self._jaxed else self._h
+        self.h_q = jit(self._h_q_jx) if self._jaxed else self._h_q
+
     def assembler_callback(self):
         self.qDOF = self.subsystem.qDOF[self.subsystem.local_qDOF_P(self.xi)]
         self.uDOF = self.subsystem.uDOF[self.subsystem.local_uDOF_P(self.xi)]
@@ -38,11 +44,14 @@ class Force:
     def E_pot(self, t, q):
         return -(self.force(t) @ self.r_OP(t, q))
 
-    def h(self, t, q, u):
+    def _h(self, t, q, u):
         return self.force(t) @ self.J_P(t, q)
 
-    def h_q(self, t, q, u):
+    def _h_q(self, t, q, u):
         return einsum("i,ijk->jk", self.force(t), self.J_P_q(t, q))
+
+    def _h_q_jx(self, t, q, u):
+        return jnp.einsum("i,ijk->jk", self.force(t), self.J_P_q(t, q))
 
     def export(self, sol_i, **kwargs):
         points = [self.r_OP(sol_i.t, sol_i.q[self.qDOF])]
@@ -82,15 +91,25 @@ class B_Force:
         self.J_P = lambda t, q: subsystem.J_P(t, q, xi=xi, B_r_CP=B_r_CP)
         self.J_P_q = lambda t, q: subsystem.J_P_q(t, q, xi=xi, B_r_CP=B_r_CP)
 
+        self._jaxed = subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
+
+        self.h = jit(self._h) if self._jaxed else self._h
+        self.h_q = jit(self._h_q_jx) if self._jaxed else self._h_q
+
     def assembler_callback(self):
         self.qDOF = self.subsystem.qDOF[self.subsystem.local_qDOF_P(self.xi)]
         self.uDOF = self.subsystem.uDOF[self.subsystem.local_uDOF_P(self.xi)]
 
-    def h(self, t, q, u):
+    def _h(self, t, q, u):
         return (self.A_IB(t, q) @ self.force(t)) @ self.J_P(t, q)
 
-    def h_q(self, t, q, u):
+    def _h_q(self, t, q, u):
         return einsum(
+            "ijk,j,il->lk", self.A_IB_q(t, q), self.force(t), self.J_P(t, q)
+        ) + einsum("i,ijk->jk", self.A_IB(t, q) @ self.force(t), self.J_P_q(t, q))
+
+    def _h_q_jx(self, t, q, u):
+        return jnp.einsum(
             "ijk,j,il->lk", self.A_IB_q(t, q), self.force(t), self.J_P(t, q)
         ) + einsum("i,ijk->jk", self.A_IB(t, q) @ self.force(t), self.J_P_q(t, q))
 
