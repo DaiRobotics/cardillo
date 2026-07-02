@@ -1,4 +1,4 @@
-from tdcm_li2023_main import *
+from tdcm_li2023 import *
 
 
 SETPOINT_TABLE = {
@@ -32,6 +32,7 @@ def test_one_setpoint_convergence():
 
     print("calc E")
     la_t_E = np.array([1.9, 1.8, 1.9, 2.1])
+    la_t_E = np.array([1.9244945,  1.78542759, 1.9244945,  2.05885467])
     sol, x, solver = static_model.apply_forces(
         la_t_E, force_steps=10, ret_all_steps=False, verbose=True
     )
@@ -40,8 +41,9 @@ def test_one_setpoint_convergence():
 
     print("calc E to A")
     la_t_A = np.array([0.7, 3.2, 0, 0])
+    la_t_A = np.array([0.73792114, 3.17753766, 0.0, 0.0])
     # la_t_A = la_t_E * 1.5
-    # TODO interpolate the force manually, and set ret_all_steps=False
+    # TODO interpolate the force manually, and set ret_all_steps=False # normally 30
     sol2, x, solver = static_model.apply_forces(
         la_t_A, force_steps=30, ret_all_steps=True, verbose=True
     )
@@ -75,11 +77,14 @@ def test_one_setpoint_convergence():
     def la_t_ref_fn(t):
         return np.array([interp1d(ts2, la_t_EA[:, i], t) for i in range(4)])
 
+
     print("dynamic control:")
-    Kp = 0.5
+    Kp = 0.05
+    Kd = 0.0
     dynamic_model = DynamicModel(
-        t_sim, Kp, Gamma0, la_t_fb0, r_OP_ref_fn, la_t_ref_fn, q0, damping_ratio=0.0
+        t_sim, Kp, Kd, Gamma0, la_t_fb0, r_OP_ref_fn, la_t_ref_fn, q0, damping_ratio=0.0
     )
+    print(Kp)
     sol = dynamic_model.solver.solve()
 
     # ---- visualization ----
@@ -120,40 +125,60 @@ def test_one_setpoint_convergence():
 
     t = sol.t
     q = sol.q[:, rod.qDOF].reshape((-1, rod.nnode, 7))
-    r_OP_traj = np.array([r_OP_ref_fn(ti) for ti in t])
+    r_OP_ref = np.array([r_OP_ref_fn(ti) for ti in t])
+    r_OP = q[:,-1, 0:3]
+    e = r_OP_ref - r_OP
+    e_n = np.array([np.linalg.norm(e[i]) for i in range(len(e))])
 
     # ---- Point to Point plots ----
-    fig = plt.figure(figsize=(8, 6))
+    fig = plt.figure(figsize=(8,6))
     gs = fig.add_gridspec(3, 1)
 
     atx = fig.add_subplot(gs[0, 0])
     atx.plot(t, q[:, -1, 0], "r", label="actual")
-    atx.plot(t, r_OP_traj[:, 0], "b--", label="desired")
-    atx.set_xlabel("time [s]")
+    atx.plot(t, r_OP_ref[:, 0], "b--", label="desired")
+    atx.set_xlabel("Time [s]")
     atx.set_ylabel("X [m]")
     atx.legend()
     atx.grid(True)
 
     aty = fig.add_subplot(gs[1, 0])
     aty.plot(t, q[:, -1, 1], "r", label="actual")
-    aty.plot(t, r_OP_traj[:, 1], "b--", label="desired")
-    aty.set_xlabel("time [s]")
+    aty.plot(t, r_OP_ref[:, 1], "b--", label="desired")
+    aty.set_xlabel("Time [s]")
     aty.set_ylabel("Y [m]")
     aty.legend()
     aty.grid(True)
 
     atz = fig.add_subplot(gs[2, 0])
     atz.plot(t, q[:, -1, 2], "r", label="actual")
-    atz.plot(t, r_OP_traj[:, 2], "b--", label="desired")
-    atz.set_xlabel("time [s]")
+    atz.plot(t, r_OP_ref[:, 2], "b--", label="desired")
+    atz.set_xlabel("Time [s]")
     atz.set_ylabel("Z [m]")
     atz.legend()
     atz.grid(True)
 
-    fig.suptitle(f"Trajectory tracking (point-to-point)")
+
+    fig.suptitle(f"Tip Trajectory Tracking (E to A)")
     fig.tight_layout()
 
+
+    fig2, ax = plt.subplots(4, 1, figsize=(8, 8), sharex=True)
+    for i, lbl in enumerate(("e_x", "e_y", "e_z")):
+        ax[i].plot(t, e[:, i], "r")
+        ax[i].set_ylabel(rf"${lbl}$ [m]")
+        ax[i].grid(True)
+
+    ax[3].plot(t, e_n, "k")              
+    ax[3].set_ylabel(r"$e_{norm}$ [m]")
+    ax[3].grid(True)
+
+    ax[-1].set_xlabel("Time [s]")          
+    fig2.suptitle("Tracking Error per Direction (E to A)")
+    fig2.tight_layout()
+
     plt.show()
+
 
 
 if __name__ == "__main__":
