@@ -66,8 +66,8 @@ class System:
 
     """
 
-    def __init__(self, t0=0, origin_size=0):
-        self.t0 = np.float64(t0)
+    def __init__(self, t0=0.0, origin_size=0):
+        self.t0 = t0
         self.nq = 0
         self.nu = 0
         self.nla_g = 0

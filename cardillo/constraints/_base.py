@@ -3,7 +3,7 @@ import warnings
 import numpy as np
 from jax import jit, numpy as jnp, jacrev
 
-from cardillo import math_jax
+from cardillo import math_jax as mj
 from cardillo.math_numba import ax2skew, cross3
 from cardillo.math.approx_fprime import approx_fprime
 
@@ -595,10 +595,7 @@ class PositionOrientationBase:
             Omega21 = self.Omega1(t, q, u) - self.Omega2(t, q, u)
 
             n = jnp.array(
-                [
-                    math_jax.cross3(A_IJ1[:, a], A_IJ2[:, b])
-                    for a, b in self.projection_pairs
-                ]
+                [mj.cross3(A_IJ1[:, a], A_IJ2[:, b]) for a, b in self.projection_pairs]
             )
             g_dot2 = n @ Omega21
             g_dot = jnp.concatenate((g_dot, g_dot2))
@@ -709,10 +706,7 @@ class PositionOrientationBase:
             J_R2 = A_IB2 @ self.subsystem2.B_J_R(t, q[self._nq1 :], self.xi2)
 
             n = jnp.array(
-                [
-                    math_jax.cross3(A_IJ1[:, a], A_IJ2[:, b])
-                    for a, b in self.projection_pairs
-                ]
+                [mj.cross3(A_IJ1[:, a], A_IJ2[:, b]) for a, b in self.projection_pairs]
             )
             W_g2 = jnp.concatenate(((n @ J_R1).T, (-n @ J_R2).T), axis=0)
             W_g = jnp.concatenate((W_g, W_g2), axis=1)

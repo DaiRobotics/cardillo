@@ -1,4 +1,5 @@
 import numpy as np
+from time import perf_counter
 
 from cardillo.constraints import RigidConnection
 from cardillo.forces import Force
@@ -145,8 +146,21 @@ if __name__ == "__main__":
         n_load_steps=100,
         verbose=True,
     )
-    sol = solver.solve()
 
+    solver.fun(solver.x[0], system.t0)
+    solver.jac(solver.x[0], system.t0)
+
+    # from cProfile import Profile
+    # prof = Profile()
+    # prof.enable()
+
+    t0 = perf_counter()
+    sol = solver.solve()
+    print("time:", perf_counter() - t0)
+
+    # prof.disable()
+    # prof.dump_stats("prof.prof")
+    # exit()
     #################
     # visualization #
     #################

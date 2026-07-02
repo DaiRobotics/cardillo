@@ -74,12 +74,13 @@ def cantilever_beam(Solver, Rod, profile=False):
     system.add(force_gravity)
     system.assemble()
 
-    t1 = 3
+    t1 = 3.0
     solver = Solver(system, t1, 1e-2)
+    system.t0 = 0.0
+    solver.fun(system.t0, solver.y0, solver.y0)
+    solver.jac(system.t0, solver.y0, solver.y0)
 
     if profile:
-        solver.fun(0.0, solver.y0, solver.y0)
-        solver.jac(0.0, solver.y0, solver.y0)
         prof = cProfile.Profile()
         prof.enable()
 

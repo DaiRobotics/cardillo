@@ -10,7 +10,7 @@ from cardillo.math_numba import (
     cross3,
     Log_SO3_quat,
 )
-from cardillo import math_jax
+from cardillo import math_jax as mj
 
 from cardillo.math import A_IB_basic
 from cardillo.utility.coo_matrix import CooMatrix
@@ -95,20 +95,20 @@ class ElementKinematics(ABC):
         v_C0 = u[:3]
         v_C1 = u[6:9]
         v_C = v_C0 + alpha * (v_C1 - v_C0)
-        return v_C + A_IB @ math_jax.cross3(B_Omega, B_r_CP)
+        return v_C + A_IB @ mj.cross3(B_Omega, B_r_CP)
 
     @staticmethod
     @jit
     def v_P_q(alpha, q, u, B_r_CP):
         A_IB_q = ElementKinematics.A_IB_q(alpha, q)
         B_Omega = ElementKinematics.B_Omega(alpha, u)
-        return math_jax.cross3(B_Omega, B_r_CP) @ A_IB_q
+        return mj.cross3(B_Omega, B_r_CP) @ A_IB_q
 
     @staticmethod
     @jit
     def J_P(alpha, q, B_r_CP):
         A_IB = ElementKinematics.A_IB(alpha, q)
-        B_r_CP_tilde = math_jax.ax2skew(B_r_CP)
+        B_r_CP_tilde = mj.ax2skew(B_r_CP)
         r_CP_tilde = A_IB @ B_r_CP_tilde
 
         return jnp.concatenate(
@@ -125,7 +125,7 @@ class ElementKinematics(ABC):
     @jit
     def J_P_q(alpha, q, B_r_CP):
         A_IB_q = ElementKinematics.A_IB_q(alpha, q)
-        B_r_CP_tilde = math_jax.ax2skew(B_r_CP)
+        B_r_CP_tilde = mj.ax2skew(B_r_CP)
         r_CP_tilde_q = B_r_CP_tilde.T @ A_IB_q
 
         J_P_q = jnp.zeros((3, 12, 14))
@@ -143,8 +143,7 @@ class ElementKinematics(ABC):
         a_C1 = u_dot[6:9]
         a_C = a_C0 + alpha * (a_C1 - a_C0)
         return a_C + A_IB @ (
-            math_jax.cross3(B_Psi, B_r_CP)
-            + math_jax.cross3(B_Omega, math_jax.cross3(B_Omega, B_r_CP))
+            mj.cross3(B_Psi, B_r_CP) + mj.cross3(B_Omega, mj.cross3(B_Omega, B_r_CP))
         )
 
     @staticmethod
@@ -152,7 +151,7 @@ class ElementKinematics(ABC):
     def A_IB(alpha, q):
         P0, P1 = q[3:7], q[10:]
         P = P0 + alpha * (P1 - P0)
-        return math_jax.Exp_SO3_quat_norm(P)
+        return mj.Exp_SO3_quat(P)
 
     @staticmethod
     @jit
@@ -160,7 +159,7 @@ class ElementKinematics(ABC):
         P0, P1 = q[3:7], q[10:]
         P = P0 + alpha * (P1 - P0)
 
-        A_P = math_jax.Exp_SO3_quat_P_norm(P)
+        A_P = mj.Exp_SO3_quat_P(P)
 
         A_IB_q = jnp.concatenate(
             [
@@ -519,8 +518,8 @@ class DiscreteRod:
         P = 0.5 * (P0 + P1)
         P_s = (P1 - P0) * inv_Le
 
-        A_IB = math_jax.Exp_SO3_quat_norm(P)
-        T = math_jax.T_SO3_quat_norm(P)
+        A_IB = mj.Exp_SO3_quat(P)
+        T = mj.T_SO3_quat(P)
 
         return r_OC_s, P, P_s, A_IB, T
 
@@ -560,14 +559,14 @@ class DiscreteRod:
         inv_Le = 1.0 / Le
 
         # A_IB_qe
-        A_P_2 = 0.5 * math_jax.Exp_SO3_quat_P_norm(P)
+        A_P_2 = 0.5 * mj.Exp_SO3_quat_P(P)
         A_IB_qe = jnp.concatenate(
             [jnp.zeros((3, 3, 3)), A_P_2, jnp.zeros((3, 3, 3)), A_P_2],
             axis=-1,
         )  # (3,3,14)
 
         # T_qe
-        T_P_2 = 0.5 * math_jax.T_SO3_quat_P_norm(P)  # (3,4,4)
+        T_P_2 = 0.5 * mj.T_SO3_quat_P(P)  # (3,4,4)
         T_qe = jnp.concatenate(
             [jnp.zeros((3, 4, 3)), T_P_2, jnp.zeros((3, 4, 3)), T_P_2],
             axis=-1,
@@ -594,8 +593,8 @@ class DiscreteRod:
         A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
         v_C_s, B_Omega, B_Omega_s = DiscreteRod._eval_dot_common(ue, Le)
 
-        B_gamma_dot = A_IB.T @ v_C_s - math_jax.cross3(B_Omega, B_gamma)
-        B_kappa_dot = B_Omega_s - math_jax.cross3(B_Omega, B_kappa)
+        B_gamma_dot = A_IB.T @ v_C_s - mj.cross3(B_Omega, B_gamma)
+        B_kappa_dot = B_Omega_s - mj.cross3(B_Omega, B_kappa)
 
         return B_gamma_dot, B_kappa_dot
 
@@ -608,9 +607,9 @@ class DiscreteRod:
 
         B_gamma_dot_qe = (
             jnp.tensordot(A_IB_qe, v_C_s, axes=[[0], [0]])
-            - math_jax.ax2skew(B_Omega) @ B_gamma_qe
+            - mj.ax2skew(B_Omega) @ B_gamma_qe
         )
-        B_kappa_dot_qe = -math_jax.ax2skew(B_Omega) @ B_kappa_qe
+        B_kappa_dot_qe = -mj.ax2skew(B_Omega) @ B_kappa_qe
 
         return B_gamma_dot_qe, B_kappa_dot_qe
 
@@ -736,7 +735,7 @@ class DiscreteRod:
     @staticmethod
     @jit
     def _q_dot_node(q, u):
-        T = math_jax.T_SO3_inv_quat(q[3:]) @ u[3:]
+        T = mj.T_SO3_inv_quat(q[3:]) @ u[3:]
         return jnp.concatenate([u[:3], T])
 
     _q_dot_nodes = jit(vmap(_q_dot_node.__func__))
@@ -747,7 +746,7 @@ class DiscreteRod:
     @staticmethod
     @jit
     def _p_dot_p_node(q, u):
-        return u[3:] @ math_jax.T_SO3_inv_quat_P(q[3:])
+        return u[3:] @ mj.T_SO3_inv_quat_P(q[3:])
 
     _p_dot_p_nodes = jit(vmap(_p_dot_p_node.__func__))
 
@@ -757,7 +756,7 @@ class DiscreteRod:
         ).ravel()
 
     def q_dot_u(self, t, q):
-        T_SO3_inv_quat_nodes = math_jax.T_SO3_inv_quat_batch(
+        T_SO3_inv_quat_nodes = mj.T_SO3_inv_quat_batch(
             self._view_nodal_q(q)[:, 3:]
         ).__array__()
         # TODO: speed up
@@ -783,7 +782,7 @@ class DiscreteRod:
     def _h_node(u, B_Theta_C):
         B_omega_IB = u[3:]
         tmp = B_Theta_C @ B_omega_IB
-        cross = math_jax.cross3(tmp, B_omega_IB)
+        cross = mj.cross3(tmp, B_omega_IB)
         return jnp.pad(cross, (3, 0))
 
     _h_nodes = jit(vmap(_h_node.__func__))
@@ -794,10 +793,7 @@ class DiscreteRod:
     @staticmethod
     @jit
     def _h_u_node(B_omega_IB, B_Theta_C):
-        return (
-            math_jax.ax2skew(B_Theta_C @ B_omega_IB)
-            - math_jax.ax2skew(B_omega_IB) @ B_Theta_C
-        )
+        return mj.ax2skew(B_Theta_C @ B_omega_IB) - mj.ax2skew(B_omega_IB) @ B_Theta_C
 
     _h_u_nodes = jit(vmap(_h_u_node.__func__))
 
@@ -956,8 +952,8 @@ class DiscreteRod:
     @jit
     def _W_c_el(qe, Le):
         A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
-        s1 = 0.5 * Le * math_jax.ax2skew(B_gamma)
-        s2 = 0.5 * Le * math_jax.ax2skew(B_kappa)
+        s1 = 0.5 * Le * mj.ax2skew(B_gamma)
+        s2 = 0.5 * Le * mj.ax2skew(B_kappa)
 
         row1 = jnp.concatenate([A_IB, Z3], axis=1)
         row2 = jnp.concatenate([s1, E3 + s2], axis=1)

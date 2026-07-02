@@ -69,6 +69,7 @@ class Newton:
         self._jac_coo = CooMatrix((self.nx, self.nx))
 
     def fun(self, x, t):
+        t = float(t)
         c0, c1, c2 = self.split_x
         r0, r1, r2, r3 = self.split_f
         # unpack unknowns
@@ -117,6 +118,7 @@ class Newton:
         return F
 
     def jac(self, x, t):
+        t = float(t)
         c0, c1, c2 = self.split_x
         r0, r1, r2, r3 = self.split_f
         # unpack unknowns

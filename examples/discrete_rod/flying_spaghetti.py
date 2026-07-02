@@ -1,4 +1,7 @@
+from time import perf_counter
+
 import numpy as np
+from jax import numpy as jnp
 
 from cardillo import System
 from cardillo.math import A_IB_basic
@@ -15,7 +18,12 @@ nelement = 10
 L = 10
 radius = 0.03
 cross_section = CircularCrossSection(radius)
-cross_section_inertias = CrossSectionInertias(A_rho0=1, B_I_rho0=np.diag([20, 10, 10]))
+cross_section_inertias = CrossSectionInertias(
+    A_rho0=1, B_I_rho0=np.diag([20, 10, 10])
+)  # Hesse
+cross_section_inertias = CrossSectionInertias(
+    A_rho0=1, B_I_rho0=np.diag([20, 10, 10])
+)  # Boyer
 
 EI = 500
 EA = 1e4
@@ -39,24 +47,34 @@ rod = DiscreteRod(
 
 
 def f(t):
-    if t <= 2.5:
-        return 80 * t
-    elif t <= 5:
-        return 400 - 80 * t
-    else:
-        return 0.0
+    return 80 * t * (t <= 2.5) + (t > 2.5) * (t <= 5) * (400 - 80 * t)
 
 
-force = Force(lambda t: np.array([f(t) / 10, 0, 0]), rod, xi=0)
-moment = Moment(lambda t: np.array([0, f(t), f(t) / 2]), rod, xi=0)
+force = Force(lambda t: jnp.array([f(t) / 10, 0, 0]), rod, xi=0)
+moment = Moment(lambda t: jnp.array([0, f(t), -f(t) / 2]), rod, xi=0)
 
 
 system = System()
 system.add(rod, force, moment)
 system.assemble()
 
-solver = ScipyDAE(system, 15, 1e-1, rtol=1e-3, atol=1e-6)
+
+solver = ScipyDAE(system, 7.0, 1e-1, rtol=1e-3, atol=1e-6)
+system.t0 = 0.0
+solver.fun(system.t0, solver.y0, solver.y0)
+solver.jac(system.t0, solver.y0, solver.y0)
+
+# from cProfile import Profile
+# prof = Profile()
+# prof.enable()
+
+t0 = perf_counter()
 sol = solver.solve()
+print(f"Simulation time: {perf_counter() - t0:.2f} s")
+
+# prof.disable()
+# prof.dump_stats("prof.prof")
+
 
 t = sol.t
 weights = np.ones(nelement + 1)
@@ -100,13 +118,19 @@ plt.legend()
 # configurations
 plt.figure()
 plt.subplot(2, 1, 1)
+plt.plot(r_OC[:, 0, 0] - 6, r_OC[:, 0, 2], "k")
+plt.plot(r_OC[:, -1, 0] - 6, r_OC[:, -1, 2], "--k")
 for i in [0, 20, 30, 38, 44, 50, 55, 58, 61, 65]:
-    plt.plot(r_OC[i, :, 0], r_OC[i, :, 2])
+    plt.plot(r_OC[i, :, 0] - 6, r_OC[i, :, 2])
+plt.grid()
 plt.axis("equal")
 
 plt.subplot(2, 1, 2)
+plt.plot(r_OC[:, 0, 1], r_OC[:, 0, 2], "k")
+plt.plot(r_OC[:, -1, 1], r_OC[:, -1, 2], "--k")
 for i in [0, 25, 35, 38, 45]:
     plt.plot(r_OC[i, :, 1], r_OC[i, :, 2])
+plt.grid()
 plt.axis("equal")
 
 

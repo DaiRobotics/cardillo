@@ -9,7 +9,7 @@ from cardillo.interactions.n_point_interaction import nPointInteraction
 from cardillo.rods import CircularCrossSection
 from cardillo.rods._base import CosseratRod_PetrovGalerkin
 from cardillo.solver.solution import Solution
-from cardillo import math_jax
+from cardillo import math_jax as mj
 
 
 class _VisualTwinBase(ABC):
@@ -148,7 +148,7 @@ class VisualDiscreteRod(_VisualTwinBase):
         q_rod = sol_i.q[rod.qDOF]
         q_nodes = rod._view_nodal_q(q_rod)
         r_OC_nodes = q_nodes[:, :3]
-        A_IB_nodes = math_jax.Exp_SO3_quat_norm_batch(q_nodes[:, 3:]).__array__()
+        A_IB_nodes = mj.Exp_SO3_quat_batch(q_nodes[:, 3:]).__array__()
         control_pts = r_OC_nodes[:, None] + (A_IB_nodes @ self.control_pts).swapaxes(
             1, 2
         )

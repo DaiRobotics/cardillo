@@ -1,7 +1,9 @@
 from cachetools import cachedmethod, LRUCache
 import numpy as np
 from vtk import VTK_VERTEX
+from jax import numpy as jnp
 
+from cardillo import math_jax as mj
 from cardillo.math import (
     cross3,
     ax2skew,
@@ -102,6 +104,8 @@ class RigidBody:
         self._A_IB_q = np.zeros((3, 3, self.nq), dtype=float)
         self._r_OP_q = np.zeros((3, self.nq), dtype=float)
 
+        self._jaxed = True
+
     #####################
     # utility
     #####################
@@ -173,50 +177,32 @@ class RigidBody:
     def local_uDOF_P(self, xi=None):
         return np.arange(self.nu)
 
-    # @cachedmethod(
-    #     lambda self: self.A_IB_cache,
-    #     key=lambda self, t, q, xi=None: q.tobytes(),
-    # )
     def A_IB(self, t, q, xi=None):
-        return Exp_SO3_quat(q[3:])
+        return mj.Exp_SO3_quat(q[3:])
 
-    # @cachedmethod(
-    #     lambda self: self.A_IB_q_cache,
-    #     key=lambda self, t, q, xi=None: q.tobytes(),
-    # )
     def A_IB_q(self, t, q, xi=None):
-        self._A_IB_q[:, :, 3:] = Exp_SO3_quat_P(q[3:])
-        return self._A_IB_q
+        return jnp.concatenate((np.zeros((3, 3, 3)), mj.Exp_SO3_quat_P(q[3:])), axis=-1)
+        # self._A_IB_q[:, :, 3:] = Exp_SO3_quat_P(q[3:])
+        # return self._A_IB_q
 
-    # @cachedmethod(
-    #     lambda self: self.r_OP_cache,
-    #     key=lambda self, t, q, xi=None, B_r_CP=np.zeros(3, dtype=float): (
-    #         q.tobytes(),
-    #         B_r_CP.tobytes(),
-    #     ),
-    # )
     def r_OP(self, t, q, xi=None, B_r_CP=np.zeros(3, dtype=float)):
-        return q[:3] + self.A_IB(t, q) @ B_r_CP if B_r_CP.any() else q[:3]
+        return q[:3] + self.A_IB(t, q) @ B_r_CP
+        # return q[:3] + self.A_IB(t, q) @ B_r_CP if B_r_CP.any() else q[:3]
 
     def r_OP_q(self, t, q, xi=None, B_r_CP=np.zeros(3, dtype=float)):
-        self._r_OP_q.fill(0.0)
-        self._r_OP_q[:, :3] = eye3
-        if B_r_CP.any():
-            self._r_OP_q += B_r_CP @ self.A_IB_q(t, q)
-        return self._r_OP_q
+        r_OP_q = B_r_CP @ self.A_IB_q(t, q)
+        r_OP_q = r_OP_q.at[:, :3].add(eye3)
+        return r_OP_q
+        # self._r_OP_q.fill(0.0)
+        # self._r_OP_q[:, :3] = eye3
+        # if B_r_CP.any():
+        #     self._r_OP_q += B_r_CP @ self.A_IB_q(t, q)
+        # return self._r_OP_q
 
-    # @cachedmethod(
-    #     lambda self: self.v_P_cache,
-    #     key=lambda self, t, q, u, xi=None, B_r_CP=np.zeros(3, dtype=float): (
-    #         q.tobytes(),
-    #         u.tobytes(),
-    #         B_r_CP.tobytes(),
-    #     ),
-    # )
     def v_P(self, t, q, u, xi=None, B_r_CP=np.zeros(3, dtype=float)):
-        return (
-            u[:3] + self.A_IB(t, q) @ cross3(u[3:], B_r_CP) if B_r_CP.any() else u[:3]
-        )
+        return u[:3] + self.A_IB(t, q) @ mj.cross3(
+            u[3:], B_r_CP
+        )  # if B_r_CP.any() else u[:3]
 
     def v_P_q(self, t, q, u, xi=None, B_r_CP=np.zeros(3, dtype=float)):
         return (
@@ -250,14 +236,8 @@ class RigidBody:
             )
         return a_P_u
 
-    # @cachedmethod(
-    #     lambda self: self.J_P_cache,
-    #     key=lambda self, t, q, xi=None, B_r_CP=np.zeros(3, dtype=float): (
-    #         q.tobytes(),
-    #         B_r_CP.tobytes(),
-    #     ),
-    # )
     def J_P(self, t, q, xi=None, B_r_CP=np.zeros(3, dtype=float)):
+        return jnp.concatenate((eye3, -self.A_IB(t, q) @ mj.ax2skew(B_r_CP)), axis=-1)
         J_P = np.zeros((3, self.nu), dtype=q.dtype)
         J_P[:, :3] = eye3
         if B_r_CP.any():

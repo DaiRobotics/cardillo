@@ -127,8 +127,8 @@ def helix(
 
     # warm up
     if isinstance(rod, DiscreteRod):
-        solver.fun(solver.x[0], 0)
-        solver.jac(solver.x[0], 0)
+        solver.fun(solver.x[0], system.t0)
+        solver.jac(solver.x[0], system.t0)
 
     if profile:
         prof = Profile()
@@ -236,6 +236,7 @@ if __name__ == "__main__":
         name="helix",
         profile=False,
     )
+    print(f"time jax      : {t_sim2:.2f} s")
 
     t_sim1, rod1, q1 = helix(
         Rod,
@@ -247,9 +248,8 @@ if __name__ == "__main__":
         name="helix",
         profile=False,
     )
-
     print(f"time mixed rod: {t_sim1:.2f} s")
-    print(f"time jax      : {t_sim2:.2f} s")
+
     print(f"t_jax / t_mix : {t_sim1/t_sim2:.2f} x")
 
     ######
@@ -259,13 +259,8 @@ if __name__ == "__main__":
 
     r_OC2s = q2[-1, rod2.qDOF].reshape((-1, 7), order="C")
 
-    print(np.linalg.norm(r_OC1s - r_OC2s, np.inf))
-
-    fig = plt.figure()
-
-    from mpl_toolkits.mplot3d import Axes3D
-
-    ax1 = fig.add_subplot(2, 1, 1, projection="3d")
+    fig = plt.figure(figsize=(10, 5))
+    ax1 = fig.add_subplot(1, 2, 1, projection="3d")
 
     ax1.plot(r_OC1s[:, 0], r_OC1s[:, 1], r_OC1s[:, 2], "-xr", label="rod1")
     ax1.plot(r_OC2s[:, 0], r_OC2s[:, 1], r_OC2s[:, 2], "-b.", label="rod2")
@@ -277,9 +272,10 @@ if __name__ == "__main__":
 
     ax1.set_box_aspect([1, 1, 1])
 
-    ax2 = fig.add_subplot(2, 1, 2)
+    ax2 = fig.add_subplot(1, 2, 2)
 
     ax2.plot(np.linalg.norm(r_OC1s - r_OC2s, axis=1), "-b.")
     ax2.set_yscale("log")
+    ax2.grid()
 
     plt.show(block=True)

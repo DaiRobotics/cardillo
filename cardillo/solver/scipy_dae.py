@@ -115,6 +115,7 @@ class ScipyDAE:
         return 1
 
     def fun(self, t, y, yp):
+        t = float(t)
         # update progress bar
         i1 = int(t // self.frac)
         self.pbar.update(i1 - self.i)
@@ -197,6 +198,7 @@ class ScipyDAE:
         return F
 
     def jac(self, t, y, yp):
+        t = float(t)
         sys = self.system
 
         # unpack vectors
