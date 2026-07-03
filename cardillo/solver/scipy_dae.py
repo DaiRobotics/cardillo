@@ -89,18 +89,35 @@ class ScipyDAE:
 
         # data allocation
         self.F = np.zeros(self.ny, dtype=float)
-        self.g_q1 = self.g_q1_T = self._W_tau = self.W_g1 = self.W_gamma1 = (
-            self.W_c1
-        ) = None
-        self.q_dot_q = self.q_dot_u = None
+        self.g_q1 = CooMatrix((system.nla_g, system.nq), manual_sync=True)
+        self.g_q1_T = CooMatrix((system.nq, system.nla_g), manual_sync=True)
+        self._W_tau = CooMatrix((system.nu, system.nla_tau), manual_sync=True)
+        self.W_g1 = CooMatrix((system.nu, system.nla_g), manual_sync=True)
+        self.W_gamma1 = CooMatrix((system.nu, system.nla_gamma), manual_sync=True)
+        self.W_c1 = CooMatrix((system.nu, system.nla_c), manual_sync=True)
+        self.q_dot_q = CooMatrix((system.nq, system.nq), manual_sync=True)
+        self.q_dot_u = CooMatrix((system.nq, system.nu), manual_sync=True)
 
-        self.Mu_q = self.h_q = self.h_u = self.Wla_tau_q = self.Wla_tau_u = (
-            self.Wla_g_q
-        ) = self.Wla_gamma_q = self.Wla_c_q = None
-        self.g_dot_q = self.g_dot_u = self.gamma_q = self.gamma_u = self.c_q = (
-            self.c_u
-        ) = None
-        self.M1 = self.M2 = self.g_q2 = self.W_g2 = self.W_gamma2 = self.W_c2 = None
+        self.Mu_q = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self.h_q = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self.h_u = CooMatrix((system.nu, system.nu), manual_sync=True)
+        self.Wla_tau_q = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self.Wla_tau_u = CooMatrix((system.nu, system.nu), manual_sync=True)
+        self.Wla_g_q = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self.Wla_gamma_q = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self.Wla_c_q = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self.g_dot_q = CooMatrix((system.nla_g, system.nq), manual_sync=True)
+        self.g_dot_u = CooMatrix((system.nla_g, system.nu), manual_sync=True)
+        self.gamma_q = CooMatrix((system.nla_gamma, system.nq), manual_sync=True)
+        self.gamma_u = CooMatrix((system.nla_gamma, system.nu), manual_sync=True)
+        self.c_q = CooMatrix((system.nla_c, system.nq), manual_sync=True)
+        self.c_u = CooMatrix((system.nla_c, system.nu), manual_sync=True)
+        self.M1 = CooMatrix((system.nu, system.nu), manual_sync=True)
+        self.M2 = CooMatrix((system.nu, system.nu), manual_sync=True)
+        self.g_q2 = CooMatrix((system.nla_g, system.nq), manual_sync=True)
+        self.W_g2 = CooMatrix((system.nu, system.nla_g), manual_sync=True)
+        self.W_gamma2 = CooMatrix((system.nu, system.nla_gamma), manual_sync=True)
+        self.W_c2 = CooMatrix((system.nu, system.nla_c), manual_sync=True)
 
         self.Jy = CooMatrix((self.ny, self.ny))
         self.Jyp = CooMatrix((self.ny, self.ny))
@@ -157,7 +174,6 @@ class ScipyDAE:
         F0 = q_dot - self.system.q_dot(t, q, u)
         if self.nla_g:
             g_q.manual_sync()
-            g_q._manual_sync = True
             F0 -= g_q_T.tocsr(fix_size=True) @ mu_g
         F[: self.split[0]] = F0
         ####################
@@ -169,13 +185,11 @@ class ScipyDAE:
             F1 -= W_tau.tocsr(fix_size=True) @ self.system.la_tau(t, q, u)
         if sys.nla_g:
             W_g.manual_sync()
-            W_g._manual_sync = True
             F1 -= W_g.tocsr(fix_size=True) @ la_g
         if sys.nla_gamma:
             F1 -= W_gamma.tocsr(fix_size=True) @ la_gamma
         if sys.nla_c:
             W_c.manual_sync()
-            W_c._manual_sync = True
             F1 -= W_c.tocsr(fix_size=True) @ la_c
         F[self.split[0] : self.split[1]] = F1
 
@@ -273,11 +287,9 @@ class ScipyDAE:
         h_u = self.h_u = self.system.h_u(t, q, u, format="Coo", coo=self.h_u)
 
         q_dot_q.manual_sync()
-        q_dot_q._manual_sync = True
         Jy["q_dot_q", :s0, :s0] = -q_dot_q
 
         q_dot_u.manual_sync()
-        q_dot_u._manual_sync = True
         Jy["q_dot_u", :s0, s0:s1] = -q_dot_u
 
         # note: Here we ignore the derivative d((dg/dq)^T mu) / dq since
@@ -285,59 +297,44 @@ class ScipyDAE:
         # Jy[:self.split[0], self.split[1]:self.split[2]] = g_q_T_mu_q
 
         Mu_q.manual_sync()
-        Mu_q._manual_sync = True
         Jy["Mu_q", s0:s1, :s0] = Mu_q
 
         h_q.manual_sync()
-        h_q._manual_sync = True
         Jy["h_q", s0:s1, :s0] = -h_q
 
         h_u.manual_sync()
-        h_u._manual_sync = True
         Jy["h_u", s0:s1, s0:s1] = -h_u
 
         if sys.nla_tau:
             Wla_tau_q.manual_sync()
-            Wla_tau_q._manual_sync = True
-            Wla_tau_u.manual_sync()
-            Wla_tau_u._manual_sync = True
             Jy["Wla_tau_q", s0:s1, :s0] = -Wla_tau_q
+            Wla_tau_u.manual_sync()
             Jy["Wla_tau_u", s0:s1, s0:s1] = -Wla_tau_u
 
         if sys.nla_gamma:
             Wla_gamma_q.manual_sync()
-            Wla_gamma_q._manual_sync = True
-            gamma_q.manual_sync()
-            gamma_q._manual_sync = True
-            gamma_u.manual_sync()
-            gamma_u._manual_sync = True
             Jy["Wla_gamma_q", s0:s1, :s0] = -Wla_gamma_q
+            gamma_q.manual_sync()
             Jy["gamma_q", s3:s4, :s0] = gamma_q
+            gamma_u.manual_sync()
             Jy["gamma_u", s3:s4, s0:s1] = gamma_u
 
         if sys.nla_g:
             Wla_g_q.manual_sync()
-            Wla_g_q._manual_sync = True
-            g_q.manual_sync()
-            g_q._manual_sync = True
-            g_dot_q.manual_sync()
-            g_dot_q._manual_sync = True
-            g_dot_u.manual_sync()
-            g_dot_u._manual_sync = True
             Jy["Wla_g_q", s0:s1, :s0] = -Wla_g_q
+            g_q.manual_sync()
             Jy["g_q", s1:s2, :s0] = g_q
+            g_dot_q.manual_sync()
             Jy["g_dot_q", s2:s3, :s0] = g_dot_q
+            g_dot_u.manual_sync()
             Jy["g_dot_u", s2:s3, s0:s1] = g_dot_u
 
         if sys.nla_c:
             Wla_c_q.manual_sync()
-            Wla_c_q._manual_sync = True
-            c_q.manual_sync()
-            c_q._manual_sync = True
-            c_u.manual_sync()
-            c_u._manual_sync = True
             Jy["Wla_c_q", s0:s1, :s0] = -Wla_c_q
+            c_q.manual_sync()
             Jy["c_q", s4:, :s0] = c_q
+            c_u.manual_sync()
             Jy["c_u", s4:, s0:s1] = c_u
 
         # second Jacobian w.r.t. yp
@@ -348,17 +345,14 @@ class ScipyDAE:
         Jyp["M", s0:s1, s0:s1] = M
         if sys.nla_g:
             W_g.manual_sync()
-            W_g._manual_sync = True
             Jyp["g_q_T", :s0, s1:s2] = -g_q.T
             Jyp["W_g", s0:s1, s2:s3] = -W_g
 
         if sys.nla_gamma:
             W_gamma.manual_sync()
-            W_gamma._manual_sync = True
             Jyp["W_gamma", s0:s1, s3:s4] = -W_gamma
         if sys.nla_c:
             W_c.manual_sync()
-            W_c._manual_sync = True
             Jyp["W_c", s0:s1, s4:] = -W_c
 
         return Jy.tocsc(fix_size=True), Jyp.tocsc(fix_size=True)

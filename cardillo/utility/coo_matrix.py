@@ -23,26 +23,27 @@ class CooMatrix:
 
     def __init__(self, shape, manual_sync=False):
         self._manual_sync = manual_sync
+        self.shape = shape
         # check shape input
-        if isinstance(shape, tuple):
-            pass
-        else:
-            try:
-                shape = tuple(shape)
-            except Exception:
-                raise ValueError(
-                    "input argument shape is not tuple or cannot be interpreted as tuple"
-                )
+        # if isinstance(shape, tuple):
+        #     pass
+        # else:
+        #     try:
+        #         shape = tuple(shape)
+        #     except Exception:
+        #         raise ValueError(
+        #             "input argument shape is not tuple or cannot be interpreted as tuple"
+        #         )
 
-        # see https://github.com/scipy/scipy/blob/adc4f4f7bab120ccfab9383aba272954a0a12fb0/scipy/sparse/sputils.py#L210
-        if isshape(shape, nonneg=True):
-            M, N = shape
-            # see https://github.com/scipy/scipy/blob/adc4f4f7bab120ccfab9383aba272954a0a12fb0/scipy/sparse/sputils.py#L267
-            self.shape = check_shape((M, N))
-        else:
-            raise TypeError(
-                "input argument shape cannot be interpreted as correct shape"
-            )
+        # # see https://github.com/scipy/scipy/blob/adc4f4f7bab120ccfab9383aba272954a0a12fb0/scipy/sparse/sputils.py#L210
+        # if isshape(shape, nonneg=True):
+        #     M, N = shape
+        #     # see https://github.com/scipy/scipy/blob/adc4f4f7bab120ccfab9383aba272954a0a12fb0/scipy/sparse/sputils.py#L267
+        #     self.shape = check_shape((M, N))
+        # else:
+        #     raise TypeError(
+        #         "input argument shape cannot be interpreted as correct shape"
+        #     )
 
         # numpy array as efficient container for numerical data
         self.data = np.empty(0, dtype=float)  # double
