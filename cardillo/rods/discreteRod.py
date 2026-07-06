@@ -319,40 +319,55 @@ class DiscreteRod:
             lambda q: DiscreteRod._eval_els(DiscreteRod._gen_element_q(q), self.L_els)
         )
 
-        self.q_dot = jit(self._q_dot)
+        q_dot_jit = jit(self._q_dot)
 
-        _q_dot_q = jit(self._q_dot_q)
+        def q_dot(t, q, u):
+            return q_dot_jit(t, q, u)
+
+        self.q_dot = q_dot
+
+        q_dot_q_jit = jit(self._q_dot_q)
 
         def q_dot_q(t, q, u):
-            self._q_dot_q_coo.data = _q_dot_q(t, q, u)
+            self._q_dot_q_coo.data = q_dot_q_jit(t, q, u)
             return self._q_dot_q_coo
 
         self.q_dot_q = q_dot_q
 
-        self.h = jit(self._h)
+        h_jit = jit(self._h)
 
-        _h_u = jit(self._h_u)
+        def h(t, q, u):
+            return h_jit(t, q, u)
+
+        self.h = h
+
+        h_u_jit = jit(self._h_u)
 
         def h_u(t, q, u):
-            self._h_u_coo.data = _h_u(t, q, u)
+            self._h_u_coo.data = h_u_jit(t, q, u)
             return self._h_u_coo
 
         self.h_u = h_u
 
         self.la_c = jit(self._la_c)
 
-        self.c = jit(self._c)
+        c_jit = jit(self._c)
 
-        _c_q = jit(self._c_q)
+        def c(t, q, u, la_c):
+            return c_jit(t, q, u, la_c)
+
+        self.c = c
+
+        c_q_jit = jit(self._c_q)
 
         def c_q(t, q, u, la_c):
-            self._c_q_coo.data = _c_q(t, q, u, la_c)
+            self._c_q_coo.data = c_q_jit(t, q, u, la_c)
             return self._c_q_coo
 
         self.c_q = c_q
 
         if self._damping:
-            _c_u = jit(
+            c_u_jit = jit(
                 lambda q, u: DiscreteRod._c_damp_u_els(
                     DiscreteRod._gen_element_q(q),
                     DiscreteRod._gen_element_u(u),
@@ -361,23 +376,23 @@ class DiscreteRod:
             )
 
             def c_u(t, q, u, la_c):
-                self._c_u_coo.data = _c_u(q, u)
+                self._c_u_coo.data = c_u_jit(q, u)
                 return self._c_u_coo
 
             self.c_u = c_u
 
-        _W_c = jit(self._W_c)
+        W_c_jit = jit(self._W_c)
 
         def W_c(t, q):
-            self._W_c_coo.data = _W_c(t, q)
+            self._W_c_coo.data = W_c_jit(t, q)
             return self._W_c_coo
 
         self.W_c = W_c
 
-        _Wla_c_q = jit(self._Wla_c_q)
+        Wla_c_q_jit = jit(self._Wla_c_q)
 
         def Wla_c_q(t, q, la_c):
-            self._Wla_c_q_coo.data = _Wla_c_q(t, q, la_c)
+            self._Wla_c_q_coo.data = Wla_c_q_jit(t, q, la_c)
             return self._Wla_c_q_coo
 
         self.Wla_c_q = Wla_c_q
@@ -467,6 +482,10 @@ class DiscreteRod:
         self._q_dot_u_coo.row = np.array(_slice_to_array(self.nodalDOF_r)).flatten()
         self._q_dot_u_coo.col = np.array(_slice_to_array(self.nodalDOF_r_u)).flatten()
         self._q_dot_u_coo.data = np.ones((len(self._q_dot_u_coo.col),), dtype=float)
+        for n in range(self.nnode):
+            nodalDOF_p = self.nodalDOF_p[n]
+            nodalDOF_p_u = self.nodalDOF_p_u[n]
+            self._q_dot_u_coo[n, nodalDOF_p, nodalDOF_p_u] = np.empty((4, 3))
         # h_u
         self._h_u_coo = CooMatrix((self.nu, self.nu))
         _, self._h_u_coo.row, self._h_u_coo.col = _combine_indices(
@@ -735,7 +754,7 @@ class DiscreteRod:
     @staticmethod
     @jit
     def _q_dot_node(q, u):
-        T = mj.T_SO3_inv_quat(q[3:]) @ u[3:]
+        T = mj.T_SO3_inv_quat(q[3:], normalize=False) @ u[3:]
         return jnp.concatenate([u[:3], T])
 
     _q_dot_nodes = jit(vmap(_q_dot_node.__func__))
@@ -746,7 +765,7 @@ class DiscreteRod:
     @staticmethod
     @jit
     def _p_dot_p_node(q, u):
-        return u[3:] @ mj.T_SO3_inv_quat_P(q[3:])
+        return u[3:] @ mj.T_SO3_inv_quat_P(q[3:], normalize=False)
 
     _p_dot_p_nodes = jit(vmap(_p_dot_p_node.__func__))
 
@@ -756,14 +775,13 @@ class DiscreteRod:
         ).ravel()
 
     def q_dot_u(self, t, q):
-        T_SO3_inv_quat_nodes = mj.T_SO3_inv_quat_batch(
-            self._view_nodal_q(q)[:, 3:]
-        ).__array__()
+        T_SO3_inv_quat_nodes = (
+            mj.T_SO3_inv_quat_batch(self._view_nodal_q(q)[:, 3:], normalize=False)
+            .__array__()
+            .ravel()
+        )
         # TODO: speed up
-        for n in range(self.nnode):
-            nodalDOF_p = self.nodalDOF_p[n]
-            nodalDOF_p_u = self.nodalDOF_p_u[n]
-            self._q_dot_u_coo[n, nodalDOF_p, nodalDOF_p_u] = T_SO3_inv_quat_nodes[n]
+        self._q_dot_u_coo.data[-len(T_SO3_inv_quat_nodes) :] = T_SO3_inv_quat_nodes
         return self._q_dot_u_coo
 
     def step_callback(self, t, q, u):

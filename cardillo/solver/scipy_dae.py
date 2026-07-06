@@ -4,7 +4,7 @@ from scipy_dae.integrate import solve_dae
 from tqdm import tqdm
 
 from cardillo.solver import Solution, SolverSummary
-from cardillo.utility.coo_matrix import CooMatrix
+from cardillo.utility.coo_matrix import CooMatrix, CooArray
 
 
 # TODO:
@@ -95,6 +95,7 @@ class ScipyDAE:
         self.W_g1 = CooMatrix((system.nu, system.nla_g), manual_sync=True)
         self.W_gamma1 = CooMatrix((system.nu, system.nla_gamma), manual_sync=True)
         self.W_c1 = CooMatrix((system.nu, system.nla_c), manual_sync=True)
+        self.q_dot = CooArray(system.nq, manual_sync=True)
         self.q_dot_q = CooMatrix((system.nq, system.nq), manual_sync=True)
         self.q_dot_u = CooMatrix((system.nq, system.nu), manual_sync=True)
 
@@ -155,6 +156,7 @@ class ScipyDAE:
         F = self.F
         sys = self.system
 
+        q_dot2 = self.q_dot = self.system.q_dot(t, q, u, format="Coo", coo=self.q_dot)
         if self.nla_g:
             g_q = self.g_q1 = self.system.g_q(t, q, format="Coo", coo=self.g_q1)
             g_q_T = self.g_q1_T = g_q.transpose(copy=False, coo=self.g_q1_T)
@@ -171,7 +173,8 @@ class ScipyDAE:
         ####################
         # kinematic equation
         ####################
-        F0 = q_dot - self.system.q_dot(t, q, u)
+        q_dot2.manual_sync()
+        F0 = q_dot - q_dot2.toarray(fix_size=True)
         if self.nla_g:
             g_q.manual_sync()
             F0 -= g_q_T.tocsr(fix_size=True) @ mu_g

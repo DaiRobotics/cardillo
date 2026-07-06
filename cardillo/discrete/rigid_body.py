@@ -1,7 +1,7 @@
 from cachetools import cachedmethod, LRUCache
 import numpy as np
 from vtk import VTK_VERTEX
-from jax import numpy as jnp
+from jax import jit, numpy as jnp
 
 from cardillo import math_jax as mj
 from cardillo.math import (
@@ -105,6 +105,12 @@ class RigidBody:
         self._r_OP_q = np.zeros((3, self.nq), dtype=float)
 
         self._jaxed = True
+        q_dot_jit = jit(self._q_dot_jx)
+
+        def q_dot(t, q, u):
+            return q_dot_jit(t, q, u)
+
+        self.q_dot = q_dot
 
     #####################
     # utility
@@ -116,11 +122,10 @@ class RigidBody:
     #####################
     # kinematic equations
     #####################
-    def q_dot(self, t, q, u):
-        q_dot = self._q_dot
-        q_dot[:3] = u[:3]
-        q_dot[3:] = T_SO3_inv_quat(q[3:], normalize=False) @ u[3:]
-        return q_dot
+    def _q_dot_jx(self, t, q, u):
+        return jnp.concatenate(
+            (u[:3], mj.T_SO3_inv_quat(q[3:], normalize=False) @ u[3:])
+        )
 
     def q_dot_q(self, t, q, u):
         q_dot_q = self._q_dot_q

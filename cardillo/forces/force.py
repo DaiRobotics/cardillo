@@ -32,10 +32,23 @@ class Force:
         self.J_P = lambda t, q: subsystem.J_P(t, q, xi, B_r_CP)
         self.J_P_q = lambda t, q: subsystem.J_P_q(t, q, xi, B_r_CP)
 
-        self._jaxed = subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
+        _jaxed = self._jaxed = (
+            subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
+        )
 
-        self.h = jit(self._h) if self._jaxed else self._h
-        self.h_q = jit(self._h_q_jx) if self._jaxed else self._h_q
+        if _jaxed:
+            h_jit = jit(self._h)
+
+            def h(t, q, u):
+                return h_jit(t, q, u)
+
+            h_q_jit = jit(self._h_q_jx)
+
+            def h_q(t, q, u):
+                return h_q_jit(t, q, u)
+
+        self.h = h if _jaxed else self._h
+        self.h_q = h_q if _jaxed else self._h_q
 
     def assembler_callback(self):
         self.qDOF = self.subsystem.qDOF[self.subsystem.local_qDOF_P(self.xi)]
@@ -91,10 +104,23 @@ class B_Force:
         self.J_P = lambda t, q: subsystem.J_P(t, q, xi=xi, B_r_CP=B_r_CP)
         self.J_P_q = lambda t, q: subsystem.J_P_q(t, q, xi=xi, B_r_CP=B_r_CP)
 
-        self._jaxed = subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
+        _jaxed = self._jaxed = (
+            subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
+        )
 
-        self.h = jit(self._h) if self._jaxed else self._h
-        self.h_q = jit(self._h_q_jx) if self._jaxed else self._h_q
+        if _jaxed:
+            h_jit = jit(self._h)
+
+            def h(t, q, u):
+                return h_jit(t, q, u)
+
+            h_q_jit = jit(self._h_q_jx)
+
+            def h_q(t, q, u):
+                return h_q_jit(t, q, u)
+
+        self.h = h if _jaxed else self._h
+        self.h_q = h_q if _jaxed else self._h_q
 
     def assembler_callback(self):
         self.qDOF = self.subsystem.qDOF[self.subsystem.local_qDOF_P(self.xi)]
