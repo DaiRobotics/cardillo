@@ -75,11 +75,11 @@ def zy_circle_trajectory():
         return np.array([interp1d(ts_ff, la_ts[:, i], t) for i in range(4)])
 
     # print("dynamic control:")
-    Kp = 0
-    Kd = 0.05
+    Kp = 5
+    Kd = 0.0
     dynamic_model = DynamicModel(
         t_sim, Kp, Kd, Gamma0, la_t_fb0, 
-        make_zy_circle, la_t_ref_fn, q0, damping_ratio=0.3
+        make_zy_circle, la_t_ref_fn, q0, damping_ratio=0.0
     )
     sol = dynamic_model.solver.solve()
     print(Kp, Kd)
@@ -178,8 +178,96 @@ def zy_circle_trajectory():
 
     plt.show()    
 
-def setpoint_table_trajectory():
+## Linear interpolation in Task Space 
+def setpoint_table_csv():
     t_sim = 50
+    N = 50 # Default is 50 (for i) I used 100 )
+    sequence = ["E", "A", "B", "C", "D", "E"]
+    r_OP_ref = np.array([SETPOINT_TABLE[k] for k in sequence])
+    ts = np.linspace(0, t_sim, len(r_OP_ref))
+
+
+    # TODO: Fix interp1d_blend, why does it not move on to the next setpoint
+    def r_OP_ref_fn(t):
+        # return np.array([interp1d(ts, r_OP_ref[:, i], t) for i in range(3)])
+        # return np.array([interp1d_poly(ts, r_OP_ref[:, i], t) for i in range(3)])
+        return np.array([interp1d_blend(ts, r_OP_ref[:, i], t, t_blend=0.5) for i in range(3)]) # FIX
+
+    import matplotlib.pyplot as plt
+    ts_plot = np.linspace(0, t_sim, 1000)
+    r_OP_plot = np.array([r_OP_ref_fn(ti) for ti in ts_plot])
+    plt.figure()
+    plt.plot(ts_plot, r_OP_plot[:, 0], "r", label="X")
+    plt.plot(ts_plot, r_OP_plot[:, 1], "g", label="Y")
+    plt.plot(ts_plot, r_OP_plot[:, 2], "b", label="Z")
+    plt.xlabel("Time [s]")
+    plt.ylabel("Position [m]")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    r_OP_refs = discrete_path(r_OP_ref_fn, t_sim, N)
+
+    la_t0 = np.array([0.5, 0.5, 0.5, 0.5])
+    la_ts, qs, Gammas = inverse_statics(r_OP_refs, la_t0,force_steps=20)
+
+    csv_file_name = f"inverse_statics_setpoints_results_{t_sim}_blend.csv"
+    csv_file = Path(__file__).parent / csv_file_name
+    # csv_file = Path(__file__).parent / "inverse_statics_setpoints_results.csv"
+    df = pd.DataFrame(
+        {i: [la_ts[i].tolist(), qs[i].tolist(), Gammas[i].tolist()] for i in range(len(la_ts))},
+        index=["la_t", "q", "Gamma"]
+    )
+    df.to_csv(csv_file)
+
+def setpoint_trajectory_ts():
+    ## Load csv
+    # csv_file = Path(__file__).parent / "inverse_statics_setpoints_results_50.csv"
+    csv_file = Path(__file__).parent / "inverse_statics_setpoints_results_50_poly.csv"
+    # csv_file = Path(__file__).parent / "inverse_statics_setpoints_results_50_blend.csv"
+    # csv_file = Path(__file__).parent / "inverse_statics_setpoints_results_50_N100.csv"
+
+    df = pd.read_csv(csv_file, index_col=0)
+    df.columns = df.columns.astype(int)
+
+    la_ts = np.array([np.array(ast.literal_eval(df.loc["la_t", i])) for i in df.columns])
+    qs = np.array([np.array(ast.literal_eval(df.loc["q", i])) for i in df.columns])
+    Gammas = np.array([np.array(ast.literal_eval(df.loc["Gamma", i])) for i in df.columns])
+
+    t_sim = 50
+    q0 = qs[0]
+    la_t_fb0 = la_ts[0]
+    Gamma0 = Gammas[0]
+
+    ts_ff = np.linspace(0, t_sim, len(la_ts))
+    def la_t_ref_fn(t):
+        return np.array([interp1d(ts_ff, la_ts[:, i], t) for i in range(4)])
+        # return np.array([interp1d_poly(ts_ff, la_ts[:, i], t) for i in range(4)])
+
+    sequence = ["E", "A", "B", "C", "D", "E"]
+    r_OP_ref = np.array([SETPOINT_TABLE[k] for k in sequence])
+    ts = np.linspace(0, t_sim, len(r_OP_ref))
+    def r_OP_ref_fn(t):
+        # return np.array([interp1d(ts, r_OP_ref[:, i], t) for i in range(3)])
+        return np.array([interp1d_poly(ts, r_OP_ref[:, i], t) for i in range(3)])
+        # return np.array([interp1d_blend(ts, r_OP_ref[:, i], t, t_blend=0.5) for i in range(3)]) # FIX
+
+    # print("dynamic control:")
+    Kp = 0
+    Kd = 0.0
+    dynamic_model = DynamicModel(
+        t_sim, Kp, Kd, Gamma0, la_t_fb0, 
+        r_OP_ref_fn, la_t_ref_fn, q0, damping_ratio=0.0
+    )
+    sol = dynamic_model.solver.solve()
+    print(Kp, Kd)
+
+# ---- visualization ----
+    visualization_p2p(dynamic_model, sol, r_OP_ref_fn)
+
+## Interpolation in Actuator Space
+def setpoint_trajectory_as():
+    t_sim = 50 # Comment out if using hold_schedule
 
     la_t_A = np.array([0.73792114, 3.17753766, 0.0, 0.0])
     la_t_B = np.array([2.28280023, 3.48103006, 3.38276666, 1.28709287])
@@ -187,7 +275,23 @@ def setpoint_table_trajectory():
     la_t_D = np.array([2.01397515, 3.03451165, 3.10051456, 2.36642629])
     la_t_E = np.array([1.9244945,  1.78542759, 1.9244945,  2.05885467])
 
-    la_t_ref = np.concatenate((la_t_A[None, :], la_t_B[None, :], la_t_C[None, :], la_t_D[None, :], la_t_E[None, :]))
+    la_t_ref0 = np.concatenate((la_t_A[None, :], la_t_B[None, :], la_t_C[None, :], la_t_D[None, :], la_t_E[None, :]))
+    ## -------- Reference Forces la_t --------
+
+    la_t_ref = np.concatenate((la_t_E[None, :], la_t_ref0))
+    
+    # ts2 = np.linspace(0, t_sim, len(la_t_ref))
+    
+    
+    # Hold Schedule
+    la_t_ref_hold, ts2 = add_segment_holds(la_t_ref, segment_length=1, t_move=5.0, t_hold=5.0)
+    
+    def la_t_ref_fn(t):
+        # return np.array([interp1d(ts2, la_t_ref[:, i], t) for i in range(4)])
+        # return np.array([interp1d_poly(ts2, la_t_ref[:, i], t) for i in range(4)])
+        return np.array([interp1d(ts2, la_t_ref_hold[:, i], t) for i in range(4)]) # FIX
+    
+    la_t_fb0 = la_t_E
     
     static_model = StaticModel()
 
@@ -195,32 +299,33 @@ def setpoint_table_trajectory():
     Gamma0, r_OP_E, q0 = eval_gamma(static_model, la_t_E)
     # print("position E:", r_OP_E)
 
+
+    ## ------- Reference Trajectory r_OP_ref --------
     print("calc E to A")
     # TODO interpolate the force manually, and set ret_all_steps=False
+    force_steps = 50
     sol, x, solver = static_model.apply_forces(
-        la_t_ref, force_steps=50, ret_all_steps=True, verbose=True
+        la_t_ref0, force_steps=force_steps, ret_all_steps=True, verbose=True
     )
     r_OP_ref = sol.q[:, -7:-4]
     r_OP_ref = np.concatenate((r_OP_E[None, :], r_OP_ref))
-    # print("position A:", r_OP_ref[-1])
+    print("position A:", r_OP_ref[-1])
 
     # def ref traj
-    ts = np.linspace(0, t_sim, len(r_OP_ref))
+    # ts = np.linspace(0, t_sim, len(r_OP_ref))
+
+    r_OP_ref_hold, ts = add_segment_holds(r_OP_ref, segment_length=force_steps, t_move=5.0, t_hold=5.0)
 
     def r_OP_ref_fn(t):
-        return np.array([interp1d(ts, r_OP_ref[:, i], t) for i in range(3)])
+        # return np.array([interp1d(ts, r_OP_ref[:, i], t) for i in range(3)])
+        # return np.array([interp1d_poly(ts, r_OP_ref[:, i], t) for i in range(3)]) # Not needed
+        return np.array([interp1d(ts, r_OP_ref_hold[:, i], t) for i in range(3)])
 
-    la_t_ref = np.concatenate((la_t_E[None, :], la_t_ref))
-    ts2 = np.linspace(0, t_sim, len(la_t_ref))
 
-    def la_t_ref_fn(t):
-        return np.array([interp1d(ts2, la_t_ref[:, i], t) for i in range(4)])
-
-    la_t_fb0 = la_t_E
-
+    ## -------- Dynamic Solve --------
     print("dynamic control:")
-    Kp = 1.0
-    Kd = 0.0
+    Kp = 0
+    Kd = 0
     dynamic_model = DynamicModel(
         t_sim, Kp, Kd, Gamma0, la_t_fb0, r_OP_ref_fn, la_t_ref_fn, q0, damping_ratio=0.0
     )
@@ -325,4 +430,11 @@ def setpoint_table_trajectory():
 if __name__ == "__main__":
     # create_zy_circle_csv(N=50)
     # zy_circle_trajectory()
-    setpoint_table_trajectory()
+
+    ## Interpolation in Actuator Space
+    setpoint_trajectory_as()
+
+    ## Interpolation in Task Space
+    # setpoint_table_csv()
+    # setpoint_trajectory_ts()
+

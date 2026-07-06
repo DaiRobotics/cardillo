@@ -35,7 +35,7 @@ def discrete_path(r_OP_ref_fn, t_sim, N):
         r_OP_refs.append(r_OP_ref)
     return np.array(r_OP_refs)
 
-def inverse_statics(r_OP_refs, la_t0, tol=1e-7, damping=1e-4, force_steps=5):
+def inverse_statics(r_OP_refs, la_t0, tol=1e-7, damping=1e-4, force_steps=10):
     static_model = StaticModel()
 
     la_ts, qs, Gammas = [], [], []
@@ -78,9 +78,8 @@ def solve_ref_config(
         # damped (Levenberg-style) least-squares step, with a per-step limiter
         # TODO: check the implementation of Tianxiang Multibody Paper
         dla_t = Gamma.T @ np.linalg.solve(Gamma @ Gamma.T + damping * np.eye(3), e)
-        dla_t = np.clip(
-            dla_t, -0.5, 0.5
-        )  # small steps: stay in the uncrushed workspace
+        # dla_t = np.clip(
+        #     dla_t, -0.5, 0.5)  # small steps: stay in the uncrushed workspace
         la_t = np.clip(la_t + dla_t, la_t_min, la_t_max)
         # print(
         #     f"  inv-statics it {k:2d}: |tip-target|={e_n*1e3:7.3f} mm, "
@@ -264,7 +263,49 @@ def interp1d(x, y, xi):
         yi = y0 + (y1 - y0) * t
         return yi
 
+def smoothing_polynomial(s):
+    s = np.clip(s, 0.0, 1.0)
+    return 6 * s**5 - 15 * s**4 + 10 * s**3
 
+def interp1d_poly(x, y, xi):
+    """
+    linear interpolation, support multidimensional y with smoothing polynomial
+    """
+
+    idx = np.searchsorted(x, xi, side="right") - 1
+    if idx == len(y) - 1:
+        return y[-1]
+    else:
+        x0 = x[idx]
+        x1 = x[idx + 1]
+        y0 = y[idx]
+        y1 = y[idx + 1]
+        t = (xi - x0) / (x1 - x0)
+        yi = y0 + (y1 - y0) * smoothing_polynomial(t)
+        return yi
+
+def interp1d_blend(x, y, xi, t_blend):
+    x = np.asarray(x)
+    y = np.asarray(y)
+    nx = len(x)
+
+    def seg_lin(i, t):
+        m = (y[i + 1] - y[i]) / (x[i + 1] - x[i])
+        return y[i] + m * (t - x[i])
+
+    if xi <= x[0]:  return y[0]
+    if xi >= x[-1]: return y[-1]
+
+    j = np.searchsorted(x, xi, side="right") - 1
+    if j >= 1 and xi < x[j] + t_blend:                      # rounding after knot x[j]
+        s = smoothing_polynomial((xi - (x[j] - t_blend)) / (2 * t_blend))
+        return (1 - s) * seg_lin(j - 1, xi) + s * seg_lin(j, xi)
+    if j + 1 <= nx - 2 and xi > x[j + 1] - t_blend:          # rounding before knot x[j+1]
+        s = smoothing_polynomial((xi - (x[j + 1] - t_blend)) / (2 * t_blend))
+        return (1 - s) * seg_lin(j, xi) + s * seg_lin(j + 1, xi)
+    
+    return seg_lin(j, xi)
+    
 class CommonModel(ABC):
     def __init__(self, damping_ratio=0):
         super().__init__()
@@ -392,6 +433,7 @@ class StaticModel(CommonModel):
         _forces = np.vstack((self.la_t_init, forces))
         for i, tendon in enumerate(self.tendons):
             tendon.set_force(lambda t, i=i: interp1d(ts, _forces[:, i], t))
+            # tendon.set_force(lambda t, i=i: interp1d_poly(ts, _forces[:, i], t))
         # ------------
         #   Gravity
         # ------------
@@ -478,9 +520,178 @@ class DynamicModel(CommonModel):
         )
         # self.solver = ScipyDAE(self.system, t1=t_sim, dt=1e-2)
 
-# # sol = static_model.apply_forces([1, 0, 0, 0], force_steps=30)
+def hold_schedule(la_t_refs, t_transit, t_hold, hold_first=False, hold_last=False):
+    # Creates a schedule for how long each position should be held for
+    # r_OP_refs can be used instead of la_t_refs
+    times, vals = [], []
+    t = 0.0
+    last = len(la_t_refs) - 1
+    for i, la_t_ref in enumerate(la_t_refs):
+        if i > 0:
+            t += t_transit
+        times.append(t)
+        vals.append(la_t_ref)
 
-# # sol = static_model.apply_forces([10, 0, 0, 0], eval_keys=["sol"], force_steps=10)
+        hold = t_hold
+        if i == 0 and not hold_first:
+            hold = 0.0
+        if i == last and not hold_last:
+            hold = 0.0
+        if hold > 0.0:
+            t += hold
+            times.append(t)
+            vals.append(la_t_ref)
+    return np.array(times), np.array(vals)
+
+def add_segment_holds(traj_values, segment_length, t_move, t_hold):
+    """
+    Add a hold after each trajectory segment.
+
+    Parameters
+    ----------
+    traj_values : (N, d) array
+        Trajectory values.
+    segment_length : int
+        Number of samples in each motion segment.
+        - la_t_ref: 1
+        - r_OP_ref: force_steps
+    t_move : float
+        Time to move between waypoints.
+    t_hold : float
+        Time to hold after arriving.
+
+    Returns
+    -------
+    traj_values_new : ndarray
+        Trajectory with duplicated endpoints for holds.
+    times : ndarray
+        Corresponding timestamps.
+    """
+    traj_values = np.asarray(traj_values)
+
+    traj_values_new = [traj_values[0]]
+    times = [0.0]
+
+    t = 0.0
+    idx = 1
+
+    while idx < len(traj_values):
+
+        # current motion segment
+        segment = traj_values[idx:idx + segment_length]
+
+        # equally spaced times during the motion
+        segment_times = np.linspace(
+            t,
+            t + t_move,
+            len(segment) + 1
+        )[1:]
+
+        traj_values_new.extend(segment)
+        times.extend(segment_times)
+
+        # hold at the final point of the segment
+        t += t_move
+        traj_values_new.append(segment[-1])
+
+        t += t_hold
+        times.append(t)
+
+        idx += segment_length
+
+    return np.asarray(traj_values_new), np.asarray(times)
+
+def visualization_p2p(dynamic_model, sol, r_OP_ref_fn):
+    rod = dynamic_model.rod
+    tendons = dynamic_model.tendons
+    system = dynamic_model.system
+
+    from cardillo.visualization import Plotter, VisualDiscreteRod, VisualTendon
+
+    VisualDiscreteRod(rod, subdivision=4, opacity=0.3)
+    for tendon in tendons:
+        VisualTendon(tendon, radius=1e-3, color=(0, 200, 50))
+
+    window_size = (960, 540)
+    plotter = Plotter(system, window_size)
+    plotter.add_ground(-0.2, 0.2, -0.2, 0.2, 10, 10)
+    r_OF = np.array([0, -0.02, 0.10], float)
+    r_OC = r_OF + np.array([0.45, 0, 0], float)
+    e_x_cam = np.array([0, 0, 1], float)
+    e_z_cam = r_OF - r_OC
+    e_z_cam /= np.linalg.norm(e_z_cam)
+    e_y_cam = np.cross(e_z_cam, e_x_cam)
+    fx = 2635.5177
+    px, py = 3840, 2160
+    cam = plotter.camera
+    cam.view_angle = np.rad2deg(np.arctan(min(px, py) / 2 / fx) * 2)
+    cam.parallel_projection = False
+    cam.position = r_OC
+    cam.focal_point = r_OF
+    cam.view_up = -e_y_cam
+    cam.clipping_range = (0.01, 2)
+    cam.Zoom(1)
+
+    # plotter.live_render()
+    plotter.render_solution(sol, True, play_speed_up=1)
+
+    from matplotlib import pyplot as plt
+
+    t = sol.t
+    q = sol.q[:, rod.qDOF].reshape((-1, rod.nnode, 7))
+    r_OP_ref = np.array([r_OP_ref_fn(ti) for ti in t])
+    r_OP = q[:,-1, 0:3]
+    e = r_OP_ref - r_OP
+    e_n = np.array([np.linalg.norm(e[i]) for i in range(len(e))])
+
+   # ---- Point to Point plots ----
+    fig = plt.figure(figsize=(8,6))
+    gs = fig.add_gridspec(3, 1)
+
+    atx = fig.add_subplot(gs[0, 0])
+    atx.plot(t, q[:, -1, 0], "r", label="actual")
+    atx.plot(t, r_OP_ref[:, 0], "b--", label="desired")
+    atx.set_xlabel("Time [s]")
+    atx.set_ylabel("X [m]")
+    atx.legend()
+    atx.grid(True)
+
+    aty = fig.add_subplot(gs[1, 0])
+    aty.plot(t, q[:, -1, 1], "r", label="actual")
+    aty.plot(t, r_OP_ref[:, 1], "b--", label="desired")
+    aty.set_xlabel("Time [s]")
+    aty.set_ylabel("Y [m]")
+    aty.legend()
+    aty.grid(True)
+
+    atz = fig.add_subplot(gs[2, 0])
+    atz.plot(t, q[:, -1, 2], "r", label="actual")
+    atz.plot(t, r_OP_ref[:, 2], "b--", label="desired")
+    atz.set_xlabel("Time [s]")
+    atz.set_ylabel("Z [m]")
+    atz.legend()
+    atz.grid(True)
+
+
+    fig.suptitle(f"Tip Trajectory Tracking (E to A)")
+    fig.tight_layout()
+
+
+    fig2, ax = plt.subplots(4, 1, figsize=(8, 8), sharex=True)
+    for i, lbl in enumerate(("e_x", "e_y", "e_z")):
+        ax[i].plot(t, e[:, i], "r")
+        ax[i].set_ylabel(rf"${lbl}$ [m]")
+        ax[i].grid(True)
+
+    ax[3].plot(t, e_n, "k")              
+    ax[3].set_ylabel(r"$e_{norm}$ [m]")
+    ax[3].grid(True)
+
+    ax[-1].set_xlabel("Time [s]")          
+    fig2.suptitle("Tracking Error per Direction (E to A)")
+    fig2.tight_layout()
+
+    plt.show()    
 
 # ----- controller parameters -----
 la_t_min = 0.0
