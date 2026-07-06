@@ -392,6 +392,8 @@ class ScipyDAE:
             jac=self.jac,
             **self.kwargs,
         )
+        self.pbar.update(100 - self.i)
+        self.pbar.set_description(f"t: {self.t1:0.2e}s < {self.t1:0.2e}s", refresh=True)
         self.pbar.close()
         solver_summary.print()
 
