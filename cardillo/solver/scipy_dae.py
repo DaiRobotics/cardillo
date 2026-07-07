@@ -88,7 +88,9 @@ class ScipyDAE:
         self.i = 0
 
         # data allocation
-        self.F = np.zeros(self.ny, dtype=float)
+        self.F = CooArray(self.ny, manual_sync=True)
+        self.h = CooArray(system.nu, manual_sync=True)
+        self.c = CooArray(system.nla_c, manual_sync=True)
         self.g_q1 = CooMatrix((system.nla_g, system.nq), manual_sync=True)
         self.g_q1_T = CooMatrix((system.nq, system.nla_g), manual_sync=True)
         self._W_tau = CooMatrix((system.nu, system.nla_tau), manual_sync=True)
@@ -120,8 +122,8 @@ class ScipyDAE:
         self.W_gamma2 = CooMatrix((system.nu, system.nla_gamma), manual_sync=True)
         self.W_c2 = CooMatrix((system.nu, system.nla_c), manual_sync=True)
 
-        self.Jy = CooMatrix((self.ny, self.ny))
-        self.Jyp = CooMatrix((self.ny, self.ny))
+        self.Jy = CooMatrix((self.ny, self.ny), manual_sync=True)
+        self.Jyp = CooMatrix((self.ny, self.ny), manual_sync=True)
         eye_q = eye_array(self.nq)
         c_la_c = self.system.c_la_c()
         self.Jyp["eye_q", : self.split[0], : self.split[0]] = eye_q
@@ -155,7 +157,8 @@ class ScipyDAE:
         # residual
         F = self.F
         sys = self.system
-
+        h = self.h = self.system.h(t, q, u, format="Coo", coo=self.h)
+        c = self.c = self.system.c(t, q, u, la_c, format="Coo", coo=self.c)
         q_dot2 = self.q_dot = self.system.q_dot(t, q, u, format="Coo", coo=self.q_dot)
         if self.nla_g:
             g_q = self.g_q1 = self.system.g_q(t, q, format="Coo", coo=self.g_q1)
@@ -173,46 +176,48 @@ class ScipyDAE:
         ####################
         # kinematic equation
         ####################
-        q_dot2.manual_sync()
-        F0 = q_dot - q_dot2.toarray(fix_size=True)
+        F["q_dot", :s1] = q_dot
+        F["q_dot2", :s1, True] = q_dot2
         if self.nla_g:
             g_q.manual_sync()
-            F0 -= g_q_T.tocsr(fix_size=True) @ mu_g
-        F[: self.split[0]] = F0
+            F["g_q_T_mu_g", :s1, True] = g_q_T.tocsr(fix_size=True) @ mu_g
+
         ####################
         # equations of motion
         ####################
         M = self.M2 = self.system.M(t, q, format="Coo", coo=self.M2)
-        F1 = M.tocsr(fix_size=True) @ u_dot - self.system.h(t, q, u)
+        F["Mu", s1:s2] = M.tocsr(fix_size=True) @ u_dot
+        F["h", s1:s2, True] = h
         if sys.nla_tau:
-            F1 -= W_tau.tocsr(fix_size=True) @ self.system.la_tau(t, q, u)
+            F["Wla_tau", s1:s2, True] = W_tau.tocsr(fix_size=True) @ self.system.la_tau(
+                t, q, u
+            )
         if sys.nla_g:
             W_g.manual_sync()
-            F1 -= W_g.tocsr(fix_size=True) @ la_g
+            F["Wla_g", s1:s2, True] = W_g.tocsr(fix_size=True) @ la_g
         if sys.nla_gamma:
-            F1 -= W_gamma.tocsr(fix_size=True) @ la_gamma
+            F["Wla_gamma", s1:s2, True] = W_gamma.tocsr(fix_size=True) @ la_gamma
         if sys.nla_c:
             W_c.manual_sync()
-            F1 -= W_c.tocsr(fix_size=True) @ la_c
-        F[self.split[0] : self.split[1]] = F1
+            F["Wla_c", s1:s2, True] = W_c.tocsr(fix_size=True) @ la_c
 
         #######################
         # bilateral constraints
         #######################
         if sys.nla_g:
-            F[self.split[1] : self.split[2]] = self.system.g(t, q)
-            F[self.split[2] : self.split[3]] = self.system.g_dot(t, q, u)
+            F["g", s2:s3] = self.system.g(t, q)
+            F["g_dot", s3:s4] = self.system.g_dot(t, q, u)
 
         if sys.nla_gamma:
-            F[self.split[3] : self.split[4]] = self.system.gamma(t, q, u)
+            F["gamma", s4:s5] = self.system.gamma(t, q, u)
 
         ############
         # compliance
         ############
         if sys.nla_c:
-            F[self.split[4] :] = self.system.c(t, q, u, la_c)
-
-        return F
+            F["c", s5:] = c
+        F.manual_sync()
+        return F.toarray(fix_size=True)
 
     def jac(self, t, y, yp):
         t = float(t)
@@ -289,55 +294,37 @@ class ScipyDAE:
         h_q = self.h_q = self.system.h_q(t, q, u, format="Coo", coo=self.h_q)
         h_u = self.h_u = self.system.h_u(t, q, u, format="Coo", coo=self.h_u)
 
-        q_dot_q.manual_sync()
-        Jy["q_dot_q", :s0, :s0] = -q_dot_q
-
-        q_dot_u.manual_sync()
-        Jy["q_dot_u", :s0, s0:s1] = -q_dot_u
+        Jy["q_dot_q", :s0, :s0, True] = q_dot_q
+        Jy["q_dot_u", :s0, s0:s1, True] = q_dot_u
 
         # note: Here we ignore the derivative d((dg/dq)^T mu) / dq since
         # `solve_dae` already performs an inexact Newton method.
-        # Jy[:self.split[0], self.split[1]:self.split[2]] = g_q_T_mu_q
+        # Jy[:s1, s2:s3] = g_q_T_mu_q
 
-        Mu_q.manual_sync()
         Jy["Mu_q", s0:s1, :s0] = Mu_q
-
-        h_q.manual_sync()
-        Jy["h_q", s0:s1, :s0] = -h_q
-
-        h_u.manual_sync()
-        Jy["h_u", s0:s1, s0:s1] = -h_u
+        Jy["h_q", s0:s1, :s0, True] = h_q
+        Jy["h_u", s0:s1, s0:s1, True] = h_u
 
         if sys.nla_tau:
-            Wla_tau_q.manual_sync()
-            Jy["Wla_tau_q", s0:s1, :s0] = -Wla_tau_q
-            Wla_tau_u.manual_sync()
-            Jy["Wla_tau_u", s0:s1, s0:s1] = -Wla_tau_u
+            Jy["Wla_tau_q", s0:s1, :s0, True] = Wla_tau_q
+            Jy["Wla_tau_u", s0:s1, s0:s1, True] = Wla_tau_u
 
         if sys.nla_gamma:
-            Wla_gamma_q.manual_sync()
-            Jy["Wla_gamma_q", s0:s1, :s0] = -Wla_gamma_q
-            gamma_q.manual_sync()
+            Jy["Wla_gamma_q", s0:s1, :s0, True] = Wla_gamma_q
             Jy["gamma_q", s3:s4, :s0] = gamma_q
-            gamma_u.manual_sync()
             Jy["gamma_u", s3:s4, s0:s1] = gamma_u
 
         if sys.nla_g:
-            Wla_g_q.manual_sync()
-            Jy["Wla_g_q", s0:s1, :s0] = -Wla_g_q
+            Jy["Wla_g_q", s0:s1, :s0, True] = Wla_g_q
+            # TODO: remove this
             g_q.manual_sync()
             Jy["g_q", s1:s2, :s0] = g_q
-            g_dot_q.manual_sync()
             Jy["g_dot_q", s2:s3, :s0] = g_dot_q
-            g_dot_u.manual_sync()
             Jy["g_dot_u", s2:s3, s0:s1] = g_dot_u
 
         if sys.nla_c:
-            Wla_c_q.manual_sync()
-            Jy["Wla_c_q", s0:s1, :s0] = -Wla_c_q
-            c_q.manual_sync()
+            Jy["Wla_c_q", s0:s1, :s0, True] = Wla_c_q
             Jy["c_q", s4:, :s0] = c_q
-            c_u.manual_sync()
             Jy["c_u", s4:, s0:s1] = c_u
 
         # second Jacobian w.r.t. yp
@@ -347,17 +334,15 @@ class ScipyDAE:
 
         Jyp["M", s0:s1, s0:s1] = M
         if sys.nla_g:
-            W_g.manual_sync()
-            Jyp["g_q_T", :s0, s1:s2] = -g_q.T
-            Jyp["W_g", s0:s1, s2:s3] = -W_g
+            Jyp["g_q_T", :s0, s1:s2, True] = g_q.T
+            Jyp["W_g", s0:s1, s2:s3, True] = W_g
 
         if sys.nla_gamma:
-            W_gamma.manual_sync()
-            Jyp["W_gamma", s0:s1, s3:s4] = -W_gamma
+            Jyp["W_gamma", s0:s1, s3:s4, True] = W_gamma
         if sys.nla_c:
-            W_c.manual_sync()
-            Jyp["W_c", s0:s1, s4:] = -W_c
-
+            Jyp["W_c", s0:s1, s4:, True] = W_c
+        Jy.manual_sync()
+        Jyp.manual_sync()
         return Jy.tocsc(fix_size=True), Jyp.tocsc(fix_size=True)
 
         # note: Keep this for debugging the Jacobian
@@ -366,7 +351,7 @@ class ScipyDAE:
 
         # Jy_num = approx_derivative(lambda y: self.fun(t, y, yp), y, method="2-point")
         # diff_Jy = Jy - Jy_num
-        # diff_Jy = diff_Jy[self.split[0]:, self.split[0]:] # ignore kinematic equations since GGL Jacobian use not implemented
+        # diff_Jy = diff_Jy[s1:, s1:] # ignore kinematic equations since GGL Jacobian use not implemented
         # error_Jy = np.linalg.norm(diff_Jy)
         # print(f"error_Jy: {error_Jy}")
 
