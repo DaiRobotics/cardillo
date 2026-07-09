@@ -226,21 +226,52 @@ class PositionOrientationBase:
         else:
             _jaxed = self._jaxed = False
 
-        self.g = jit(self._g_jx) if _jaxed else self._g
-        self.g_q = jit(self._g_q_jx) if _jaxed else self._g_q
-        self.g_dot = jit(self._g_dot_jx) if _jaxed else self._g_dot
-        self.g_dot_q = (
-            jit(jacrev(self._g_dot_jx, argnums=1)) if _jaxed else self._g_dot_q
-        )
-        self.W_g = jit(lambda t, q: self._W_g_jx(t, q)) if _jaxed else self._W_g
         if _jaxed:
-            W_g_q = jacrev(self._W_g_jx, argnums=1)
+            g_jit = jit(self._g_jx)
 
-            self.Wla_g_q = jit(
-                lambda t, q, la_g: jnp.einsum("ijk,j->ik", W_g_q(t, q), la_g)
+            def g(t, q):
+                return g_jit(t, q)
+
+            g_q_jit = jit(self._g_q_jx)
+
+            def g_q(t, q):
+                return g_q_jit(t, q)
+
+            g_dot_jit = jit(self._g_dot_jx)
+
+            def g_dot(t, q, u):
+                return g_dot_jit(t, q, u)
+
+            g_dot_q_jit = jit(jacrev(self._g_dot_jx, argnums=1))
+
+            def g_dot_q(t, q, u):
+                return g_dot_q_jit(t, q, u)
+
+            W_g_jit = jit(self._W_g_jx)
+
+            def W_g(t, q):
+                return W_g_jit(t, q)
+
+            W_g_q_jx = jacrev(self._W_g_jx, argnums=1)
+            Wla_g_q_jit = jit(
+                lambda t, q, la_g: jnp.einsum("ijk,j->ik", W_g_q_jx(t, q), la_g)
             )
-        else:
-            self.Wla_g_q = self._Wla_g_q
+
+            def Wla_g_q(t, q, la_g):
+                return Wla_g_q_jit(t, q, la_g)
+
+            g_dot_u_jit = jit(lambda t, q: self._W_g_jx(t, q).T)
+
+            def g_dot_u(t, q):
+                return g_dot_u_jit(t, q)
+
+        self.g = g if _jaxed else self._g
+        self.g_q = g_q if _jaxed else self._g_q
+        self.g_dot = g_dot if _jaxed else self._g_dot
+        self.g_dot_q = g_dot_q if _jaxed else self._g_dot_q
+        self.W_g = W_g if _jaxed else self._W_g
+        self.Wla_g_q = Wla_g_q if _jaxed else self._Wla_g_q
+        self.g_dot_u = g_dot_u if _jaxed else self._g_dot_u
 
     def assembler_callback(self):
         local_qDOF1, local_qDOF2 = concatenate_qDOF(self)
@@ -630,8 +661,8 @@ class PositionOrientationBase:
 
         return g_dot_q
 
-    def g_dot_u(self, t, q):
-        return self.W_g(t, q).T
+    def _g_dot_u(self, t, q):
+        return self._W_g(t, q).T
 
     def g_ddot(self, t, q, u, u_dot):
         g_ddot = np.zeros(self.nla_g, dtype=np.float64)

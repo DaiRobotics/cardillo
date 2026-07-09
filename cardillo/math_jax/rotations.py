@@ -59,12 +59,6 @@ def Exp_SO3_quat_batch(P, normalize=True):
 
 @jit
 def _T_SO3_quat_norm(P):
-    """Tangent map for unit quaternion. See Egeland2002 (6.327).
-
-    References:
-    -----------
-    Egeland2002: https://folk.ntnu.no/oe/Modeling%20and%20Simulation.pdf
-    """
     p0, p = P[0], P[1:]
 
     # return jnp.where(
@@ -113,17 +107,7 @@ def T_SO3_quat_P_batch(P, normalize=True):
 
 
 @jit
-def _T_SO3_inv_quat_norm(P):
-    """Inverse tangent map for unit quaternion. See Egeland2002 (6.329) and
-    (6.330), Nuetzi2016 (3.11) and (4.19) as well as Rucker2018 (21) 
-    and (22).
-
-    References:
-    -----------
-    Egeland2002: https://folk.ntnu.no/oe/Modeling%20and%20Simulation.pdf \\
-    Nuetzi2016: https://www.research-collection.ethz.ch/handle/20.500.11850/117165 \\
-    Rucker2018: https://ieeexplore.ieee.org/document/8392463
-    """
+def _T_SO3_inv_quat(P):
     p0, p = P[0], P[1:]
     # return jnp.where(
     #     normalize,
@@ -135,36 +119,36 @@ def _T_SO3_inv_quat_norm(P):
 
 def T_SO3_inv_quat(P, normalize=True):
     if normalize:
-        return _T_SO3_inv_quat_norm(P)
-    else:
         raise NotImplementedError
+    else:
+        return _T_SO3_inv_quat(P)
 
 
-_T_SO3_inv_quat_norm_batch = jit(vmap(_T_SO3_inv_quat_norm))
+_T_SO3_inv_quat_batch = jit(vmap(_T_SO3_inv_quat))
 
 
 def T_SO3_inv_quat_batch(P, normalize=True):
     if normalize:
-        return _T_SO3_inv_quat_norm_batch(P)
-    else:
         raise NotImplementedError
+    else:
+        return _T_SO3_inv_quat_batch(P)
 
 
-_T_SO3_inv_quat_P_norm = jit(jacfwd(_T_SO3_inv_quat_norm))
+_T_SO3_inv_quat_P = jit(jacfwd(_T_SO3_inv_quat))
 
 
 def T_SO3_inv_quat_P(P, normalize=True):
     if normalize:
-        return _T_SO3_inv_quat_P_norm(P)
-    else:
         raise NotImplementedError
+    else:
+        return _T_SO3_inv_quat_P(P)
 
 
-_T_SO3_inv_quat_P_norm_batch = jit(vmap(jacfwd(_T_SO3_inv_quat_norm)))
+_T_SO3_inv_quat_P_batch = jit(vmap(jacfwd(_T_SO3_inv_quat)))
 
 
 def T_SO3_inv_quat_P_batch(P, normalize=True):
     if normalize:
-        return _T_SO3_inv_quat_P_norm_batch(P)
-    else:
         raise NotImplementedError
+    else:
+        return _T_SO3_inv_quat_P_batch(P)

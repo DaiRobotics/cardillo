@@ -2,7 +2,7 @@ import numpy as np
 from scipy.sparse import lil_array, bmat
 from tqdm import tqdm
 
-from cardillo.utility.coo_matrix import CooMatrix
+from cardillo.utility.coo_matrix import CooMatrix, CooArray
 from cardillo.math.fsolve import fsolve
 from cardillo.solver.solver_options import SolverOptions
 from cardillo.solver.solution import Solution
@@ -60,13 +60,21 @@ class Newton:
         # memory allocation
         self.x = np.zeros((self.nt, self.nx), dtype=float)
         self.x[0] = x0
-        self._W_g_coo = self._W_c_coo = self._W_N_coo = self._h_q_coo = (
-            self._Wla_g_q_coo
-        ) = self._Wla_c_q_coo = self._c_q_coo = self._g_q_coo = self._g_S_q_coo = (
-            self._Wla_N_q_coo
-        ) = self._g_N_q_coo = None
-        self._c_coo = self._h_coo = None
-        self._jac_coo = CooMatrix((self.nx, self.nx))
+        self._W_g_coo = CooMatrix((system.nu, system.nla_g), manual_sync=True)
+        self._W_c_coo = CooMatrix((system.nu, system.nla_c), manual_sync=True)
+        self._W_N_coo = CooMatrix((system.nu, system.nla_N), manual_sync=True)
+        self._h_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self._Wla_g_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self._Wla_c_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self._c_q_coo = CooMatrix((system.nla_c, system.nq), manual_sync=True)
+        self._g_q_coo = CooMatrix((system.nla_g, system.nq), manual_sync=True)
+        self._g_S_q_coo = CooMatrix((system.nla_S, system.nq), manual_sync=True)
+        self._Wla_N_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self._g_N_q_coo = CooMatrix((system.nla_N, system.nq), manual_sync=True)
+        self._c_coo = CooArray(system.nla_c, manual_sync=True)
+        self._h_coo = CooArray(system.nu, manual_sync=True)
+        self._jac_coo = CooMatrix((self.nx, self.nx), manual_sync=True)
+        self._F_coo = CooArray(self.nx, manual_sync=True)
 
     def fun(self, x, t):
         t = float(t)
@@ -79,43 +87,39 @@ class Newton:
         # the jacobian
         # csr is used for efficient matrix vector multiplication, see
         # https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_array.html#scipy.sparse.csr_array
-        self._W_g_coo = self.system.W_g(t, q, format="Coo", coo=self._W_g_coo)
-        self._W_c_coo = self.system.W_c(t, q, format="Coo", coo=self._W_c_coo)
-        self._W_N_coo = self.system.W_N(t, q, format="Coo", coo=self._W_N_coo)
+        W_g = self._W_g_coo = self.system.W_g(t, q, format="Coo", coo=self._W_g_coo)
+        W_c = self._W_c_coo = self.system.W_c(t, q, format="Coo", coo=self._W_c_coo)
 
-        self._c_coo = self.system.c(t, q, self.u0, la_c, format="Coo", coo=self._c_coo)
-        self._h_coo = self.system.h(t, q, self.u0, format="Coo", coo=self._h_coo)
+        c = self._c_coo = self.system.c(
+            t, q, self.u0, la_c, format="Coo", coo=self._c_coo
+        )
+        h = self._h_coo = self.system.h(t, q, self.u0, format="Coo", coo=self._h_coo)
 
         # static equilibrium
-        F = np.zeros_like(x)
+        F = self._F_coo
 
-        self._h_coo.manual_sync()
-        self._h_coo._manual_sync = True
-        h = self._h_coo.toarray(fix_size=True)
+        F["h", :r0] = h
 
-        self._W_g_coo.manual_sync()
-        self._W_g_coo._manual_sync = True
-        W_g = self._W_g_coo.tocsr(fix_size=True)
+        W_g.manual_sync()
+        F["Wla_g", :r0] = W_g.tocsr(fix_size=True) @ la_g
 
-        self._W_c_coo.manual_sync()
-        self._W_c_coo._manual_sync = True
-        W_c = self._W_c_coo.tocsr(fix_size=True)
+        W_c.manual_sync()
+        F["Wla_c", :r0] = W_c.tocsr(fix_size=True) @ la_c
 
-        W_N = self._W_N_coo.tocsr(fix_size=True)
-        self.g_N = self.system.g_N(t, q)
+        if self.nla_N:
+            W_N = self._W_N_coo = self.system.W_N(t, q, format="Coo", coo=self._W_N_coo)
+            W_N.manual_sync()
+            F["Wla_N", :r0] = W_N.tocsr(fix_size=True) @ la_N
 
-        F[:r0] = h + W_g @ la_g + W_c @ la_c + W_N @ la_N
+        F["g", r0:r1] = self.system.g(t, q)
+        F["c", r1:r2] = c
+        F["g_S", r2:r3] = self.system.g_S(t, q)
 
-        F[r0:r1] = self.system.g(t, q)
-
-        self._c_coo.manual_sync()
-        self._c_coo._manual_sync = True
-        F[r1:r2] = self._c_coo.toarray(fix_size=True)
-
-        F[r2:r3] = self.system.g_S(t, q)
-
-        F[r3:] = np.minimum(la_N, self.g_N)
-        return F
+        if self.nla_N:
+            g_N = self.g_N = self.system.g_N(t, q)
+            F["Rla_N", r3:] = np.minimum(la_N, g_N)
+        F.manual_sync()
+        return F.toarray(fix_size=True)
 
     def jac(self, x, t):
         t = float(t)
@@ -147,32 +151,16 @@ class Newton:
         # note: csr_matrix is best for row slicing, see
         # https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_array.html#scipy.sparse.csr_array
         if self.nla_N:
-            self._jac_coo = CooMatrix((self.nx, self.nx))
+            self._jac_coo = CooMatrix((self.nx, self.nx), manual_sync=True)
         jac = self._jac_coo
         jac["W_g", :r0, c0:c1] = self._W_g_coo
         jac["W_c", :r0, c1:c2] = self._W_c_coo
         jac["c_la_c", r1:r2, c1:c2] = c_la_c
         jac["g_S_q", r2:r3, :c0] = g_S_q
-
-        #
-        g_q.manual_sync()
-        g_q._manual_sync = True
         jac["g_q", r0:r1, :c0] = g_q
-
-        Wla_g_q.manual_sync()
-        Wla_g_q._manual_sync = True
         jac["Wla_g_q", :r0, :c0] = Wla_g_q
-
-        Wla_c_q.manual_sync()
-        Wla_c_q._manual_sync = True
         jac["Wla_c_q", :r0, :c0] = Wla_c_q
-
-        h_q.manual_sync()
-        h_q._manual_sync = True
         jac["h_q", :r0, :c0] = h_q
-
-        c_q.manual_sync()
-        c_q._manual_sync = True
         jac["c_q", r1:r2, :c0] = c_q
 
         if self.nla_N:
@@ -194,6 +182,7 @@ class Newton:
             jac["Rla_N_la_N", r3:, c2:] = Rla_N_q
             jac["Wla_N_q", :r0, :c0] = self._Wla_N_q_coo
 
+        jac.manual_sync()
         return jac.tocsc(fix_size=True)
         # return bmat([[      K, self.W_g, self.W_c,   self.W_N],
         #              [    g_q,     None,     None,       None],

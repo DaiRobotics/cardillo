@@ -18,7 +18,6 @@ import numpy as np
 from scipy.linalg import pinv
 from scipy.sparse.linalg import splu
 
-
 G_ACCEL = 9.81
 
 

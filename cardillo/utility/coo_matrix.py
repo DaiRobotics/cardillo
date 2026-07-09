@@ -22,35 +22,37 @@ class CooMatrix:
     """
 
     def __init__(self, shape, manual_sync=False):
-        self._manual_sync = manual_sync
+        self._buffered = manual_sync
+        self.shape = shape
         # check shape input
-        if isinstance(shape, tuple):
-            pass
-        else:
-            try:
-                shape = tuple(shape)
-            except Exception:
-                raise ValueError(
-                    "input argument shape is not tuple or cannot be interpreted as tuple"
-                )
+        # if isinstance(shape, tuple):
+        #     pass
+        # else:
+        #     try:
+        #         shape = tuple(shape)
+        #     except Exception:
+        #         raise ValueError(
+        #             "input argument shape is not tuple or cannot be interpreted as tuple"
+        #         )
 
-        # see https://github.com/scipy/scipy/blob/adc4f4f7bab120ccfab9383aba272954a0a12fb0/scipy/sparse/sputils.py#L210
-        if isshape(shape, nonneg=True):
-            M, N = shape
-            # see https://github.com/scipy/scipy/blob/adc4f4f7bab120ccfab9383aba272954a0a12fb0/scipy/sparse/sputils.py#L267
-            self.shape = check_shape((M, N))
-        else:
-            raise TypeError(
-                "input argument shape cannot be interpreted as correct shape"
-            )
+        # # see https://github.com/scipy/scipy/blob/adc4f4f7bab120ccfab9383aba272954a0a12fb0/scipy/sparse/sputils.py#L210
+        # if isshape(shape, nonneg=True):
+        #     M, N = shape
+        #     # see https://github.com/scipy/scipy/blob/adc4f4f7bab120ccfab9383aba272954a0a12fb0/scipy/sparse/sputils.py#L267
+        #     self.shape = check_shape((M, N))
+        # else:
+        #     raise TypeError(
+        #         "input argument shape cannot be interpreted as correct shape"
+        #     )
 
         # numpy array as efficient container for numerical data
         self.data = np.empty(0, dtype=float)  # double
         self.row = np.empty(0, dtype=int)  # unsigned int
         self.col = np.empty(0, dtype=int)  # unsigned int
 
-        self._data_buffer = {}
-        self._data_type = {}
+        self._allocation_index = {}
+        self._allocation_type = {}
+        self._data_buffer = []
 
     @property
     def not_empty(self):
@@ -62,21 +64,36 @@ class CooMatrix:
         if value is None:
             return
 
-        if len(key) == 3:
+        if self._buffered:
+            self._data_buffer.append((key, value))
+            return
+
+        # unpack key
+        if len(key) == 4:
+            # extract rows and columns to assign
+            identifier, rows, cols, reverse = key
+        elif len(key) == 3:
             # extract rows and columns to assign
             identifier, rows, cols = key
-            allocated = identifier in self._data_buffer.keys()
+            reverse = False
         elif len(key) == 2:
             # extract rows and columns to assign
             rows, cols = key
             identifier = None
-            allocated = False
+            reverse = False
         else:
             raise NotImplementedError
 
+        # check allocation
+        try:
+            self._allocation_index[identifier]
+            allocated = True
+        except KeyError:
+            allocated = False
+
         # determine value type
         if allocated:
-            value_type = self._data_type[identifier]
+            value_type = self._allocation_type[identifier]
         else:
             if isinstance(value, CooMatrix):
                 value_type = "Coo"
@@ -92,7 +109,7 @@ class CooMatrix:
             else:
                 raise NotImplementedError
             if identifier is not None:
-                self._data_type[identifier] = value_type
+                self._allocation_type[identifier] = value_type
 
         # convert value to array
         if value_type == "Coo":
@@ -112,11 +129,10 @@ class CooMatrix:
 
         # write data
         if allocated:
-            id0, id1, _ = self._data_buffer[identifier]
-            if self._manual_sync:
-                self._data_buffer[identifier] = (id0, id1, new_data)
-            else:
-                self.data[id0:id1] = new_data
+            id0, id1 = self._allocation_index[identifier]
+            if reverse:
+                new_data = -new_data
+            self.data[id0:id1] = new_data
         else:
             # rows and cols
             if isinstance(rows, slice):
@@ -143,20 +159,24 @@ class CooMatrix:
             # extend rows and cols
             self.row = np.concatenate([self.row, new_rows])
             self.col = np.concatenate([self.col, new_cols])
-
-            if self._manual_sync:
-                self.data = np.concatenate([self.data, np.empty_like(new_data)])
-            else:
-                self.data = np.concatenate([self.data, new_data])
+            if reverse:
+                new_data = -new_data
+            self.data = np.concatenate([self.data, new_data])
             id1 = len(self.data)
             id0 = id1 - len(new_data)
             if identifier is not None:
-                self._data_buffer[identifier] = (id0, id1, new_data)
+                self._allocation_index[identifier] = (id0, id1)
 
     def manual_sync(self):
-        if self._manual_sync:
-            for id0, id1, data in self._data_buffer.values():
-                self.data[id0:id1] = data
+        self._buffered = False
+        for key, value in self._data_buffer:
+            if isinstance(value, CooMatrix) and value._buffered:
+                value._buffered = False
+                value.manual_sync()
+                value._buffered = True
+            self[key] = value
+        self._buffered = True
+        self._data_buffer = []
 
     def extend(self, matrix, DOF):
         warnings.warn(
@@ -287,51 +307,51 @@ class CooMatrix:
         ret.data = -self.data
         return ret
 
-    # def __add__(self, other):
-    #     ret = CooMatrix(self.shape)
-    #     if isinstance(other, CooMatrix):
-    #         ret.data = np.concatenate([self.data, other.data])
-    #         ret.col = np.concatenate([self.col, other.col])
-    #         ret.row = np.concatenate([self.row, other.row])
-    #         return ret
-    #     else:
-    #         return NotImplementedError
+    def __add__(self, other):
+        ret = CooMatrix(self.shape)
+        if isinstance(other, CooMatrix):
+            ret.data = np.concatenate([self.data, other.data])
+            ret.col = np.concatenate([self.col, other.col])
+            ret.row = np.concatenate([self.row, other.row])
+            return ret
+        else:
+            return NotImplementedError
 
-    # def __radd__(self, other):
-    #     return self.__add__(other)
+    def __radd__(self, other):
+        return self.__add__(other)
 
-    # def __sub__(self, other):
-    #     if isinstance(other, CooMatrix):
-    #         ret = CooMatrix(self.shape)
-    #         ret.data = np.concatenate([self.data, -other.data])
-    #         ret.col = np.concatenate([self.col, other.col])
-    #         ret.row = np.concatenate([self.row, other.row])
-    #         return ret
-    #     else:
-    #         return NotImplementedError
+    def __sub__(self, other):
+        if isinstance(other, CooMatrix):
+            ret = CooMatrix(self.shape)
+            ret.data = np.concatenate([self.data, -other.data])
+            ret.col = np.concatenate([self.col, other.col])
+            ret.row = np.concatenate([self.row, other.row])
+            return ret
+        else:
+            return NotImplementedError
 
-    # def __rsub__(self, other):
-    #     if isinstance(other, CooMatrix):
-    #         ret = CooMatrix(self.shape)
-    #         ret.data = np.concatenate([-self.data, other.data])
-    #         ret.col = np.concatenate([self.col, other.col])
-    #         ret.row = np.concatenate([self.row, other.row])
-    #         return ret
-    #     else:
-    #         return NotImplementedError
+    def __rsub__(self, other):
+        if isinstance(other, CooMatrix):
+            ret = CooMatrix(self.shape)
+            ret.data = np.concatenate([-self.data, other.data])
+            ret.col = np.concatenate([self.col, other.col])
+            ret.row = np.concatenate([self.row, other.row])
+            return ret
+        else:
+            return NotImplementedError
 
-    # def __mul__(self, other):
-    #     ret = CooMatrix(self.shape)
-    #     ret.row = self.row.copy()
-    #     ret.col = self.col.copy()
-    #     if isinstance(other, (int, float)):
-    #         ret.data = self.data * other
-    #     else:
-    #         return NotImplementedError
-    #     return ret
+    def __mul__(self, other):
+        ret = CooMatrix(self.shape)
+        ret.row = self.row.copy()
+        ret.col = self.col.copy()
+        if isinstance(other, (int, float)):
+            ret.data = self.data * other
+        else:
+            return NotImplementedError
+        return ret
 
-    # def __rmul__(self, other):
-    #     return self.__mul__(other)
+    def __rmul__(self, other):
+        return self.__mul__(other)
 
 
 class CooArray:
@@ -341,7 +361,7 @@ class CooArray:
 
     def __init__(self, length, manual_sync=False):
         self.length = length
-        self._manual_sync = manual_sync
+        self._buffered = manual_sync
         # check shape input
         if isinstance(length, int):
             pass
@@ -356,48 +376,101 @@ class CooArray:
         self.data = np.empty(0, dtype=float)  # double
         self.col = np.empty(0, dtype=int)  # unsigned int
 
-        self._ident_2_data = {}
+        self._allocation_index = {}
+        self._allocation_type = {}
+        self._data_buffer = []
 
     def __setitem__(self, key, value):
         if value is None:
             return
-        if len(key) == 2:
+
+        if self._buffered:
+            self._data_buffer.append((key, value))
+            return
+
+        # unpack key
+        if len(key) == 3:
+            identifier, cols, reverse = key
+        elif len(key) == 2:
             identifier, cols = key
-            allocated = identifier in self._ident_2_data.keys()
+            reverse = False
         elif isinstance(key, np.ndarray):
             cols = key
             identifier = None
-            allocated = False
+            reverse = False
         else:
             raise NotImplementedError
 
+        # check allocation
+        try:
+            self._allocation_index[identifier]
+            allocated = True
+        except KeyError:
+            allocated = False
+
+        # determine value type
         if allocated:
-            id0, id1, _ = self._ident_2_data[identifier]
-            if self._manual_sync:
-                self._ident_2_data[identifier] = (id0, id1, value)
+            value_type = self._allocation_type[identifier]
+        else:
+            if isinstance(value, CooArray):
+                value_type = "Coo"
+            elif isinstance(value, (ndarray, jnp.ndarray)):
+                value_type = "ndarray"
+            elif isinstance(value, (int, float)):
+                value_type = "digit"
             else:
-                self.data[id0:id1] = value
+                raise NotImplementedError
+            if identifier is not None:
+                self._allocation_type[identifier] = value_type
+
+        # convert value to array
+        if value_type == "Coo":
+            new_data = value.data
+        elif value_type == "ndarray":
+            new_data = value
+        elif value_type == "digit":
+            new_data = np.array([value])
+        else:
+            raise NotImplementedError
+
+        # write data
+        if allocated:
+            id0, id1 = self._allocation_index[identifier]
+            if reverse:
+                new_data = -new_data
+            self.data[id0:id1] = new_data
         else:
             if isinstance(cols, slice):
-                cols = arange(*cols.indices(self.shape[1]))
+                cols = arange(*cols.indices(self.length))
             cols = atleast_1d(cols)
-            self.col = np.concatenate([self.col, cols])
-
-            id0 = len(self.data)
-            id1 = id0 + len(value)
-
-            if self._manual_sync:
-                self.data = np.concatenate([self.data, np.empty_like(value)])
+            if value_type == "Coo":
+                new_cols = cols[value.col]
+            elif value_type == "ndarray":
+                new_cols = cols
+            elif value_type == "digit":
+                new_cols = cols
             else:
-                self.data = np.concatenate([self.data, value])
+                raise NotImplementedError
 
+            # extend cols
+            self.col = np.concatenate([self.col, new_cols])
+
+            if reverse:
+                new_data = -new_data
+            self.data = np.concatenate([self.data, new_data])
+            id1 = len(self.data)
+            id0 = id1 - len(new_data)
             if identifier is not None:
-                self._ident_2_data[identifier] = (id0, id1, value)
+                self._allocation_index[identifier] = (id0, id1)
 
     def manual_sync(self):
-        if self._manual_sync:
-            for id0, id1, data in self._ident_2_data.values():
-                self.data[id0:id1] = data
+        self._buffered = False
+        for key, value in self._data_buffer:
+            if isinstance(value, CooArray) and value._buffered:
+                value._buffered = False
+                value.manual_sync()
+            self[key] = value
+        self._data_buffer = []
 
     def tocoo(self, copy=False, fix_size=False):
         """Convert container to scipy coo_array."""

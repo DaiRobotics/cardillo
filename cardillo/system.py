@@ -501,6 +501,14 @@ class System:
             coo[i, contr.uDOF, contr.la_cDOF] = contr.W_c(t, q[contr.qDOF])
         return coo.asformat(format, fix_size=True)
 
+    def Wla_c(self, t, q, u, la_c):
+        raise NotImplementedError
+        Wla_c = np.zeros(self.nu, dtype=float)
+        for i, contr in enumerate(self.__c_contr):
+            W_c = contr.W_c(t, q[contr.qDOF])
+            Wla_c[contr.uDOF] += W_c.tocsr(fix_size=True) @ la_c[contr.la_cDOF]
+        return Wla_c
+
     def Wla_c_q(self, t, q, la_c, format="coo", coo=None):
         if coo is None:
             coo = CooMatrix((self.nu, self.nq))

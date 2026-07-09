@@ -23,7 +23,7 @@ if __name__ == "__main__":
 
     nturns = 20  # number of coils Harsch2021
 
-    t1 = 20
+    t1 = 10
 
     #########
     # gravity
@@ -208,11 +208,10 @@ if __name__ == "__main__":
 
         from cProfile import Profile
 
-        solver = ScipyDAE(system, t1=20, dt=1e-3)
+        solver = ScipyDAE(system, t1=t1, dt=1e-3)
         solver.fun(system.t0, solver.y0, solver.y0)
         solver.jac(system.t0, solver.y0, solver.y0)
 
-        # sol = solver.solve()
         # prof = Profile()
         # prof.enable()
 
@@ -222,9 +221,9 @@ if __name__ == "__main__":
         # prof.dump_stats("prof.prof")
 
         sol.system = None
-        from cardillo.solver.solution import save_solution
 
-        save_solution(sol, dir_name / "wilberforce2p0_sol.npy")
+        # from cardillo.solver.solution import save_solution
+        # save_solution(sol, dir_name / "wilberforce2p0_sol.npy")
     # exit()
     q = sol.q
     nt = len(q)

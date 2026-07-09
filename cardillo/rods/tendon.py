@@ -32,14 +32,18 @@ class RodTendonForce:
             )
         )
 
-        _h = jit(self._h)
-        self.h = lambda t, q, u: _h(q, self.la(t))
+        _h_jit = jit(self._h)
 
-        _h_q = jit(self._h_q)
+        def h(t, q, u):
+            return _h_jit(q, self.la(t))
+
+        self.h = h
+
+        _h_q_jit = jit(self._h_q)
 
         def h_q(t, q, u):
             h_q_coo = self._h_q_coo
-            h_q_coo.data = _h_q(q, self.la(t))
+            h_q_coo.data = _h_q_jit(q, self.la(t))
             return h_q_coo
 
         self.h_q = h_q

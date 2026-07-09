@@ -1,0 +1,562 @@
+import numpy as np
+from scipy.sparse import eye_array, lil_array
+from scipy.integrate._ivp.common import norm, EPS
+from solve_dae.integrate._dae.radau import radau_constants
+from tqdm import tqdm
+
+from cardillo.solver import Solution, SolverSummary, SolverOptions
+from cardillo.utility.coo_matrix import CooMatrix
+from cardillo.math.fsolve import fsolve
+
+COMPLIANCE_ODE = True
+COMPLIANCE_ODE = False
+
+
+# TODO:
+# - Add Jacobian of GGl term if convergence problems occur
+class Radau:
+    """Wrapper around Radau IIA and BDF methods implementted in `scipy_dae`. 
+    A stabilized index 1 formulation is used as proposed by Anantharaman and Hiller.
+
+    References:
+    -----------
+    scipy_dae: https://github.com/JonasBreuling/scipy_dae \\
+    Anantharaman and Hiller.: https://doi.org/10.1002/nme.1620320803
+    """
+
+    def __init__(
+        self,
+        system,
+        t1,
+        dt,
+        rtol=1.0e-3,
+        atol=1.0e-6,
+        stages=3,
+        **kwargs,
+    ):
+        self.system = system
+        self.rtol = rtol
+        self.atol = atol
+        self.kwargs = kwargs
+
+        assert stages % 2 == 1
+        self.stages = stages
+        (
+            self.A,
+            self.A_inv,
+            self.C,
+            self.T,
+            self.TI,
+            self.P,
+            self.P2,
+            self.b_hat1_implicit,
+            self.v_implicit,
+            self.v_explicit,
+            self.MU_REAL,
+            self.MU_COMPLEX,
+            self.b_hat_implicit,
+            self.b_hat_explicit,
+            self.order,
+        ) = radau_constants(stages)
+
+        # modify tolerances as in radau.f line 824ff and 920ff
+        # TODO: Document this rescaling
+        EXPMNS = (stages + 1) / (2 * stages)
+
+        # newton tolerance as in radau.f line 1008ff
+        EXPMI = 1 / EXPMNS
+
+        # TODO: What is a good value here?
+        self.newton_tol = max(10 * EPS / rtol, min(0.03, rtol ** (EXPMI - 1)))
+
+        self.nq = system.nq
+        self.nu = system.nu
+        self.nla_g = self.system.nla_g
+        self.nla_gamma = self.system.nla_gamma
+        self.nla_c = self.system.nla_c
+        self.ny = self.nq + self.nu + 2 * self.nla_g + self.nla_gamma + self.nla_c
+        self.split = np.cumsum(
+            np.array(
+                [
+                    self.nq,
+                    self.nu,
+                    self.nla_g,
+                    self.nla_g,
+                    self.nla_gamma,
+                    self.nla_c,
+                ],
+                dtype=int,
+            )
+        )[:-1]
+        if COMPLIANCE_ODE:
+            self.y0 = np.concatenate(
+                (
+                    system.q0,
+                    system.u0,
+                    0 * system.la_g0,
+                    0 * system.la_g0,
+                    0 * system.la_gamma0,
+                    0 * system.la_c0,
+                )
+            )
+            self.y_dot0 = np.concatenate(
+                (
+                    system.q_dot0,
+                    system.u_dot0,
+                    0 * system.la_g0,  # GGL multiplier
+                    system.la_g0,
+                    system.la_gamma0,
+                    system.la_c0,
+                )
+            )
+        else:
+            self.y0 = np.concatenate(
+                (
+                    system.q0,
+                    system.u0,
+                    0 * system.la_g0,
+                    0 * system.la_g0,
+                    0 * system.la_gamma0,
+                    system.la_c0,
+                )
+            )
+            self.y_dot0 = np.concatenate(
+                (
+                    system.q_dot0,
+                    system.u_dot0,
+                    0 * system.la_g0,  # GGL multiplier
+                    system.la_g0,
+                    system.la_gamma0,
+                    0 * system.la_c0,
+                )
+            )
+
+        n = len(self.y0)
+        self.J_coo = CooMatrix((self.stages * n, self.stages * n))
+
+        # integration time
+        self.t0 = t0 = system.t0
+        self.t1 = (
+            t1 if t1 > t0 else ValueError("t1 must be larger than initial time t0.")
+        )
+        self.dt = dt
+        self.t = np.arange(t0, self.t1 + self.dt, self.dt)
+
+        # self.frac = (t1 - t0) / 101
+        # self.pbar = tqdm(total=100, leave=True)
+        # self.i = 0
+
+        # data allocation
+        self.F = np.zeros(self.ny, dtype=float)
+        self.g_q1 = self.g_q1_T = self._W_tau = self.W_g1 = self.W_gamma1 = (
+            self.W_c1
+        ) = None
+        self.q_dot_q = self.q_dot_u = None
+
+        self.Mu_q = self.h_q = self.h_u = self.Wla_tau_q = self.Wla_tau_u = (
+            self.Wla_g_q
+        ) = self.Wla_gamma_q = self.Wla_c_q = None
+        self.g_dot_q = self.g_dot_u = self.gamma_q = self.gamma_u = self.c_q = (
+            self.c_u
+        ) = None
+        self.M1 = self.M2 = self.g_q2 = self.W_g2 = self.W_gamma2 = self.W_c2 = None
+
+        self.Jy = CooMatrix((self.ny, self.ny))
+        self.Jyp = CooMatrix((self.ny, self.ny))
+        eye_q = eye_array(self.nq)
+        c_la_c = self.system.c_la_c()
+        self.Jyp["eye_q", : self.split[0], : self.split[0]] = eye_q
+        if COMPLIANCE_ODE:
+            self.Jyp["c_la_c", self.split[4] :, self.split[4] :] = c_la_c
+        else:
+            self.Jy["c_la_c", self.split[4] :, self.split[4] :] = c_la_c
+
+    # def event(self, t, y, yp):
+    #     q, u = np.array_split(y, self.split)[:2]
+    #     q, u = self.system.step_callback(t, q, u)
+    #     return 1
+
+    def fun(self, t, y, yp):
+        t = float(t)
+        # update progress bar
+        # i1 = int(t // self.frac)
+        # self.pbar.update(i1 - self.i)
+        # self.pbar.set_description(f"t: {t:0.2e}s < {self.t1:0.2e}s", refresh=False)
+        # self.i = i1
+
+        # unpack vectors
+        s1, s2, s3, s4, s5 = self.split
+        q, u = y[:s1], y[s1:s2]
+
+        if COMPLIANCE_ODE:
+            q_dot, u_dot, mu_g, la_g, la_gamma, la_c = (
+                yp[:s1],
+                yp[s1:s2],
+                yp[s2:s3],
+                yp[s3:s4],
+                yp[s4:s5],
+                yp[s5:],
+            )
+        else:
+            q_dot, u_dot, mu_g, la_g, la_gamma = (
+                yp[:s1],
+                yp[s1:s2],
+                yp[s2:s3],
+                yp[s3:s4],
+                yp[s4:s5],
+            )
+            la_c = y[s5:]
+
+        # residual
+        F = self.F
+
+        ####################
+        # kinematic equation
+        ####################
+        F0 = q_dot - self.system.q_dot(t, q, u)
+        if self.nla_g:
+            g_q = self.g_q1 = self.system.g_q(t, q, format="Coo", coo=self.g_q1)
+            g_q_T = self.g_q1_T = g_q.transpose(copy=False, coo=self.g_q1_T)
+            F0 -= g_q_T.tocsr(fix_size=True) @ mu_g
+        F[: self.split[0]] = F0
+
+        ####################
+        # equations of motion
+        ####################
+        sys = self.system
+        M = self.M2 = self.system.M(t, q, format="Coo", coo=self.M2)
+        F1 = M.tocsr(fix_size=True) @ u_dot - self.system.h(t, q, u)
+        if sys.nla_tau:
+            W_tau = self._W_tau = self.system.W_tau(t, q, format="Coo", coo=self._W_tau)
+            F1 -= W_tau.tocsr(fix_size=True) @ self.system.la_tau(t, q, u)
+        if sys.nla_g:
+            W_g = self.W_g1 = self.system.W_g(t, q, format="Coo", coo=self.W_g1)
+            F1 -= W_g.tocsr(fix_size=True) @ la_g
+        if sys.nla_gamma:
+            W_gamma = self.W_gamma1 = self.system.W_gamma(
+                t, q, format="Coo", coo=self.W_gamma1
+            )
+            F1 -= W_gamma.tocsr(fix_size=True) @ la_gamma
+        if sys.nla_c:
+            W_c = self.W_c1 = self.system.W_c(t, q, format="Coo", coo=self.W_c1)
+            F1 -= W_c.tocsr(fix_size=True) @ la_c
+        F[self.split[0] : self.split[1]] = F1
+
+        #######################
+        # bilateral constraints
+        #######################
+        if sys.nla_g:
+            F[self.split[1] : self.split[2]] = self.system.g(t, q)
+            F[self.split[2] : self.split[3]] = self.system.g_dot(t, q, u)
+
+        if sys.nla_gamma:
+            F[self.split[3] : self.split[4]] = self.system.gamma(t, q, u)
+
+        ############
+        # compliance
+        ############
+        if sys.nla_c:
+            F[self.split[4] :] = self.system.c(t, q, u, la_c)
+
+        return F
+
+    def jac(self, t, y, yp):
+        t = float(t)
+        # unpack vectors
+        s1, s2, s3, s4, s5 = self.split
+        q, u = y[:s1], y[s1:s2]
+
+        if COMPLIANCE_ODE:
+            q_dot, u_dot, mu_g, la_g, la_gamma, la_c = (
+                yp[:s1],
+                yp[s1:s2],
+                yp[s2:s3],
+                yp[s3:s4],
+                yp[s4:s5],
+                yp[s5:],
+            )
+        else:
+            q_dot, u_dot, mu_g, la_g, la_gamma = (
+                yp[:s1],
+                yp[s1:s2],
+                yp[s2:s3],
+                yp[s3:s4],
+                yp[s4:s5],
+            )
+            la_c = y[s5:]
+
+        sys = self.system
+
+        # first Jacobian w.r.t. y
+        Jy = self.Jy
+        # evaluate commonly used quantities
+        q_dot_q = self.q_dot_q = self.system.q_dot_q(
+            t, q, u, format="Coo", coo=self.q_dot_q
+        )
+        q_dot_u = self.q_dot_u = self.system.q_dot_u(
+            t, q, format="Coo", coo=self.q_dot_u
+        )
+
+        Mu_q = self.Mu_q = self.system.Mu_q(t, q, u_dot, format="Coo", coo=self.Mu_q)
+        h_q = self.h_q = self.system.h_q(t, q, u, format="Coo", coo=self.h_q)
+        h_u = self.h_u = self.system.h_u(t, q, u, format="Coo", coo=self.h_u)
+
+        Jy["q_dot_q", :s1, :s1] = -q_dot_q
+        Jy["q_dot_u", :s1, s1:s2] = -q_dot_u
+        # note: Here we ignore the derivative d((dg/dq)^T mu) / dq since
+        # `solve_dae` already performs an inexact Newton method.
+        # Jy[:self.split[0], self.split[1]:self.split[2]] = g_q_T_mu_q
+
+        Jy["Mu_q", s1:s2, :s1] = Mu_q
+        Jy["h_q", s1:s2, :s1] = -h_q
+        Jy["h_u", s1:s2, s1:s2] = -h_u
+        if sys.nla_tau:
+            Wla_tau_q = self.Wla_tau_q = self.system.Wla_tau_q(
+                t, q, u, format="Coo", coo=self.Wla_tau_q
+            )
+            Wla_tau_u = self.Wla_tau_u = self.system.Wla_tau_u(
+                t, q, u, format="Coo", coo=self.Wla_tau_u
+            )
+            Jy["Wla_tau_q", s1:s2, :s1] = -Wla_tau_q
+            Jy["Wla_tau_u", s1:s2, s1:s2] = -Wla_tau_u
+        if sys.nla_gamma:
+            Wla_gamma_q = self.Wla_gamma_q = self.system.Wla_gamma_q(
+                t, q, la_gamma, format="Coo", coo=self.Wla_gamma_q
+            )
+            gamma_q = self.gamma_q = self.system.gamma_q(
+                t, q, u, format="Coo", coo=self.gamma_q
+            )
+            gamma_u = self.gamma_u = self.system.gamma_u(
+                t, q, format="Coo", coo=self.gamma_u
+            )
+            Jy["Wla_gamma_q", s1:s2, :s1] = -Wla_gamma_q
+            Jy["gamma_q", s4:s5, :s1] = gamma_q
+            Jy["gamma_u", s4:s5, s1:s2] = gamma_u
+
+        if sys.nla_g:
+            Wla_g_q = self.Wla_g_q = self.system.Wla_g_q(
+                t, q, la_g, format="Coo", coo=self.Wla_g_q
+            )
+            g_q = self.g_q2 = self.system.g_q(t, q, format="Coo", coo=self.g_q2)
+            g_dot_q = self.g_dot_q = self.system.g_dot_q(
+                t, q, u, format="Coo", coo=self.g_dot_q
+            )
+            g_dot_u = self.g_dot_u = self.system.g_dot_u(
+                t, q, format="Coo", coo=self.g_dot_u
+            )
+            Jy["Wla_g_q", s1:s2, :s1] = -Wla_g_q
+            Jy["g_q", s2:s3, :s1] = g_q
+            Jy["g_dot_q", s3:s4, :s1] = g_dot_q
+            Jy["g_dot_u", s3:s4, s1:s2] = g_dot_u
+
+        if sys.nla_c:
+            Wla_c_q = self.Wla_c_q = self.system.Wla_c_q(
+                t, q, la_c, format="Coo", coo=self.Wla_c_q
+            )
+            c_q = self.c_q = self.system.c_q(t, q, u, la_c, format="Coo", coo=self.c_q)
+            c_u = self.c_u = self.system.c_u(t, q, u, la_c, format="Coo", coo=self.c_u)
+            Jy["Wla_c_q", s1:s2, :s1] = -Wla_c_q
+            Jy["c_q", s5:, :s1] = c_q
+            Jy["c_u", s5:, s1:s2] = c_u
+
+            if not COMPLIANCE_ODE:
+                W_c = self.W_c2 = self.system.W_c(t, q, format="Coo", coo=self.W_c2)
+                Jy["W_c", s1:s2, s5:] = -W_c
+
+        # second Jacobian w.r.t. yp
+        Jyp = self.Jyp
+
+        M = self.M1 = self.system.M(t, q, format="Coo", coo=self.M1)
+
+        Jyp["M", s1:s2, s1:s2] = M
+        if sys.nla_g:
+            W_g = self.W_g2 = self.system.W_g(t, q, format="Coo", coo=self.W_g2)
+            Jyp["g_q_T", :s1, s2:s3] = -g_q.T
+            Jyp["W_g", s1:s2, s3:s4] = -W_g
+        if sys.nla_gamma:
+            W_gamma = self.W_gamma2 = self.system.W_gamma(
+                t, q, format="Coo", coo=self.W_gamma2
+            )
+            Jyp["W_gamma", s1:s2, s4:s5] = -W_gamma
+        if COMPLIANCE_ODE:
+            if sys.nla_c:
+                W_c = self.W_c2 = self.system.W_c(t, q, format="Coo", coo=self.W_c2)
+                Jyp["W_c", s1:s2, s5:] = -W_c
+
+        return Jy.tocsc(fix_size=True), Jyp.tocsc(fix_size=True)
+
+        # # note: Keep this for debugging the Jacobian
+
+        # from scipy.optimize._numdiff import approx_derivative
+
+        # Jy_num = approx_derivative(lambda y: self.fun(t, y, yp), y, method="2-point")
+        # diff_Jy = Jy.asformat("coo") - Jy_num
+        # diff_Jy = diff_Jy[self.split[0]:, self.split[0]:] # ignore kinematic equations since GGL Jacobian use not implemented
+        # error_Jy = np.linalg.norm(diff_Jy)
+        # print(f"error_Jy: {error_Jy}")
+
+        # Jyp_num = approx_derivative(lambda yp: self.fun(t, y, yp), yp, method="2-point")
+        # diff_Jyp = Jyp.asformat("coo") - Jyp_num
+        # error_Jyp = np.linalg.norm(diff_Jyp)
+        # print(f"error_Jyp: {error_Jyp}")
+
+        # return Jy_num, Jyp_num
+
+    def step(self, t, y, yp):
+        n = len(y)
+        tau = t + self.dt * self.C
+
+        def residual(Yp_flat):
+            Yp = Yp_flat.copy().reshape(self.stages, -1)
+            Y = y.copy() + self.dt * self.A.dot(Yp)
+            F = np.empty((self.stages, n))
+            for i in range(self.stages):
+                F[i] = self.fun(tau[i], Y[i], Yp[i])
+            return F.reshape(-1)
+
+        def jacobian(Yp_flat):
+            # reshape flat input to stage derivatives
+            Yp = Yp_flat.copy().reshape(self.stages, -1)
+
+            # compute stage solutions
+            Y = y.copy() + self.dt * self.A.dot(Yp)
+
+            Jy_i, Jyp_i = self.jac(tau[0], Y[0], Yp[0])
+
+            # global Newton matrix
+            # J = np.zeros((self.stages * n, self.stages * n))
+            k = 0
+            for i in range(self.stages):
+                # # Jyp_i, Jy_i = self.jac(tau[i], Y[i], Yp[i])
+                # Jy_i, Jyp_i = self.jac(tau[i], Y[i], Yp[i])
+
+                row = slice(i * n, (i + 1) * n)
+                for j in range(self.stages):
+                    col = slice(j * n, (j + 1) * n)
+                    block = self.dt * self.A[i, j] * Jy_i.toarray()
+                    if i == j:
+                        block = block + Jyp_i.toarray()
+
+                    self.J_coo[k, row, col] = block
+                    k += 1
+
+            return self.J_coo.tocsc(fix_size=True)
+
+        Yp0 = np.tile(yp, self.stages)
+        sol = fsolve(
+            residual,
+            Yp0,
+            jac=jacobian,
+            inexact=True,
+            # options=SolverOptions(numerical_jacobian_method="2-point"),
+        )
+        return sol
+
+    def solve(self):
+        solver_summary = SolverSummary(f"Fixed step-size Radau")
+
+        # lists storing output variables
+        qn1, un1, _, _, _, _ = np.array_split(self.y0, self.split)
+        q_dotn1, u_dotn1, mu_gn1, la_gn1, la_gamman1, la_cn1 = np.array_split(
+            self.y_dot0, self.split
+        )
+        q = [qn1.copy()]
+        u = [un1.copy()]
+        la_g = [la_gn1.copy()]
+        la_gamma = [la_gamman1.copy()]
+        la_c = [la_cn1.copy()]
+
+        t = self.t0
+        y = self.y0.copy()
+        yp = self.y_dot0.copy()
+
+        nfrac = 100
+        # pbar = tqdm(self.t[1:], leave=True, mininterval=0.5, miniters=nfrac)
+        # for _ in pbar:
+        for t in self.t[1:]:
+            sol = self.step(t, y.copy(), yp.copy())
+            Yp = sol.x.reshape(self.stages, -1)
+            success = sol.success
+            assert success
+
+            solver_summary.add_lu(sol.njev)
+            solver_summary.add_fixed_point(sol.nit, sol.error)
+
+            Y = y.copy() + self.dt * self.A.dot(Yp)
+            y = Y[-1].copy()
+            yp = Yp[-1].copy()
+
+            qn1, un1, _, _, _, _ = np.array_split(y, self.split)
+            q_dotn1, u_dotn1, mu_gn1, la_gn1, la_gamman1, la_cn1 = np.array_split(
+                yp, self.split
+            )
+
+            # t += self.dt
+            # qn1, un1 = self.system.step_callback(t, qn1, un1)
+            # y[:self.nq] = qn1.copy()
+
+            q.append(qn1)
+            u.append(un1)
+            la_g.append(la_gn1)
+            la_gamma.append(la_gamman1)
+            la_c.append(la_cn1)
+
+        return Solution(
+            self.system,
+            t=np.array(self.t),
+            q=np.array(q),
+            u=np.array(u),
+            la_g=np.array(la_g),
+            la_gamma=np.array(la_gamma),
+            la_c=np.array(la_c),
+            solver_summary=solver_summary,
+        )
+
+        sol = solve_dae(
+            self.fun,
+            # self.t_eval[[0, -1]],
+            (self.t0, self.t1),
+            self.y0,
+            self.y_dot0,
+            # t_eval=self.t_eval,
+            t_eval=None,
+            method=self.method,
+            rtol=self.rtol,
+            atol=self.atol,
+            events=[self.event],
+            jac=self.jac,
+            dense_output=True,
+            **self.kwargs,
+        )
+        self.pbar.close()
+        # solver_summary.print()
+
+        print(f"sol:\n{sol}")
+        print(f"number of steps: {len(sol.t)}")
+        print(f"averate step-size: {np.sum(np.diff(sol.t)) / len(sol.t[:-1])}")
+
+        # compute dense output solution
+        t = self.t_eval
+        y, yp = sol.sol(t)
+
+        # unpack solution
+        # t = sol.t
+        # q, u, _, _, _, _ = np.array_split(sol.y, self.split)
+        # q_dot, u_dot, mu_g, la_g, la_gamma, la_c = np.array_split(sol.yp, self.split)
+        q, u, _, _, _, _ = np.array_split(y, self.split)
+        q_dot, u_dot, mu_g, la_g, la_gamma, la_c = np.array_split(yp, self.split)
+
+        return Solution(
+            system=self.system,
+            t_eval=sol.t,
+            t=t,
+            q=q.T,
+            u=u.T,
+            q_dot=q_dot.T,
+            u_dot=u_dot.T,
+            mu_g=mu_g.T,
+            la_g=la_g.T,
+            la_gamma=la_gamma.T,
+            la_c=la_c.T,
+            solver_summary=solver_summary,
+        )

@@ -29,9 +29,23 @@ class B_Moment:
         self.B_J_R = lambda t, q: subsystem.B_J_R(t, q, xi=xi)
         self.B_J_R_q = lambda t, q: subsystem.B_J_R_q(t, q, xi=xi)
 
-        self._jaxed = subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
-        self.h = jit(self._h) if self._jaxed else self._h
-        self.h_q = jit(self._h_q_jx) if self._jaxed else self._h_q
+        _jaxed = self._jaxed = (
+            subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
+        )
+
+        if _jaxed:
+            h_jit = jit(self._h)
+
+            def h(t, q, u):
+                return h_jit(t, q, u)
+
+            h_q_jit = jit(self._h_q_jx)
+
+            def h_q(t, q, u):
+                return h_q_jit(t, q, u)
+
+        self.h = h if _jaxed else self._h
+        self.h_q = h_q if _jaxed else self._h_q
 
     def assembler_callback(self):
         self.qDOF = self.subsystem.qDOF[self.subsystem.local_qDOF_P(self.xi)]
@@ -85,9 +99,23 @@ class Moment:
         self.B_J_R = lambda t, q: subsystem.B_J_R(t, q, xi=xi)
         self.B_J_R_q = lambda t, q: subsystem.B_J_R_q(t, q, xi=xi)
 
-        self._jaxed = subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
-        self.h = jit(self._h) if self._jaxed else self._h
-        self.h_q = jit(self._h_q_jx) if self._jaxed else self._h_q
+        _jaxed = self._jaxed = (
+            subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
+        )
+
+        if _jaxed:
+            h_jit = jit(self._h)
+
+            def h(t, q, u):
+                return h_jit(t, q, u)
+
+            h_q_jit = jit(self._h_q_jx)
+
+            def h_q(t, q, u):
+                return h_q_jit(t, q, u)
+
+        self.h = h if _jaxed else self._h
+        self.h_q = h_q if _jaxed else self._h_q
 
     def assembler_callback(self):
         self.qDOF = self.subsystem.qDOF[self.subsystem.local_qDOF_P(self.xi)]
