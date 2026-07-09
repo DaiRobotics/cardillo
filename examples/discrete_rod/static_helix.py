@@ -26,7 +26,7 @@ def helix(
     n_load_steps: int = 10,
     atol: float | None = None,
     #
-    VTK_export: bool = False,
+    VTK_export: bool = True,
     name: str = "rod",
     show_plots: bool = False,
     save_stresses: bool = False,
@@ -145,7 +145,6 @@ def helix(
     # read solution
     t = sol.t
     q = sol.q
-    return t_sim, rod, q
     la_c = sol.la_c
     la_g = sol.la_g
 
@@ -157,6 +156,8 @@ def helix(
     dir_name = Path(sys.argv[0]).parent
     if VTK_export:
         system.export(dir_name, f"vtk/slen_{slenderness:1.0e}/{save_name}", sol)
+
+    return t_sim, rod, q
 
     ##########################
     # matplotlib visualization
@@ -235,6 +236,7 @@ if __name__ == "__main__":
         show_plots=True,
         name="helix",
         profile=False,
+        VTK_export=True,
     )
 
     t_sim1, rod1, q1 = helix(

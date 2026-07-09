@@ -1,10 +1,12 @@
 import numpy as np
 from scipy.sparse import eye_array, lil_array
-from solve_dae.integrate import solve_dae
+from scipy.integrate._ivp.common import norm, EPS
+from solve_dae.integrate._dae.radau import radau_constants
 from tqdm import tqdm
 
-from cardillo.solver import Solution, SolverSummary
+from cardillo.solver import Solution, SolverSummary, SolverOptions
 from cardillo.utility.coo_matrix import CooMatrix
+from cardillo.math.fsolve import fsolve
 
 COMPLIANCE_ODE = True
 COMPLIANCE_ODE = False
@@ -12,7 +14,7 @@ COMPLIANCE_ODE = False
 
 # TODO:
 # - Add Jacobian of GGl term if convergence problems occur
-class ScipyDAE:
+class Radau:
     """Wrapper around Radau IIA and BDF methods implementted in `scipy_dae`. 
     A stabilized index 1 formulation is used as proposed by Anantharaman and Hiller.
 
@@ -27,16 +29,33 @@ class ScipyDAE:
         system,
         t1,
         dt,
-        method="Radau",
         rtol=1.0e-3,
         atol=1.0e-6,
+        stages=3,
         **kwargs,
     ):
         self.system = system
         self.rtol = rtol
         self.atol = atol
-        self.method = method
         self.kwargs = kwargs
+
+        assert stages % 2 == 1
+        self.stages = stages
+        (
+            self.A, self.A_inv, self.C, self.T, self.TI, self.P, self.P2, 
+            self.b_hat1_implicit, self.v_implicit, self.v_explicit, self.MU_REAL, self.MU_COMPLEX, 
+            self.b_hat_implicit, self.b_hat_explicit, self.order,
+        ) = radau_constants(stages)
+
+        # modify tolerances as in radau.f line 824ff and 920ff
+        # TODO: Document this rescaling
+        EXPMNS = (stages + 1) / (2 * stages)
+
+        # newton tolerance as in radau.f line 1008ff
+        EXPMI = 1 / EXPMNS
+
+        # TODO: What is a good value here?
+        self.newton_tol = max(10 * EPS / rtol, min(0.03, rtol ** (EXPMI - 1)))
 
         self.nq = system.nq
         self.nu = system.nu
@@ -102,17 +121,20 @@ class ScipyDAE:
 
         print(f"len(y0): {len(self.y0)}")
 
+        n = len(self.y0)
+        self.J_coo = CooMatrix((self.stages * n, self.stages * n))
+
         # integration time
         self.t0 = t0 = system.t0
         self.t1 = (
             t1 if t1 > t0 else ValueError("t1 must be larger than initial time t0.")
         )
         self.dt = dt
-        self.t_eval = np.arange(t0, self.t1 + self.dt, self.dt)
+        self.t = np.arange(t0, self.t1 + self.dt, self.dt)
 
-        self.frac = (t1 - t0) / 101
-        self.pbar = tqdm(total=100, leave=True)
-        self.i = 0
+        # self.frac = (t1 - t0) / 101
+        # self.pbar = tqdm(total=100, leave=True)
+        # self.i = 0
 
         # data allocation
         self.F = np.zeros(self.ny, dtype=float)
@@ -139,17 +161,17 @@ class ScipyDAE:
         else:
             self.Jy["c_la_c", self.split[4] :, self.split[4] :] = c_la_c
 
-    def event(self, t, y, yp):
-        q, u = np.array_split(y, self.split)[:2]
-        q, u = self.system.step_callback(t, q, u)
-        return 1
+    # def event(self, t, y, yp):
+    #     q, u = np.array_split(y, self.split)[:2]
+    #     q, u = self.system.step_callback(t, q, u)
+    #     return 1
 
     def fun(self, t, y, yp):
         # update progress bar
-        i1 = int(t // self.frac)
-        self.pbar.update(i1 - self.i)
-        self.pbar.set_description(f"t: {t:0.2e}s < {self.t1:0.2e}s", refresh=False)
-        self.i = i1
+        # i1 = int(t // self.frac)
+        # self.pbar.update(i1 - self.i)
+        # self.pbar.set_description(f"t: {t:0.2e}s < {self.t1:0.2e}s", refresh=False)
+        # self.i = i1
 
         # unpack vectors
         s1, s2, s3, s4, s5 = self.split
@@ -368,8 +390,113 @@ class ScipyDAE:
 
         # return Jy_num, Jyp_num
 
+    def step(self, t, y, yp):
+        n = len(y)
+        tau = t + self.dt * self.C
+
+        def residual(Yp_flat):
+            Yp = Yp_flat.copy().reshape(self.stages, -1)
+            Y = y.copy() + self.dt * self.A.dot(Yp)
+            F = np.empty((self.stages, n))
+            for i in range(self.stages):
+                F[i] = self.fun(tau[i], Y[i], Yp[i])
+            return F.reshape(-1)
+        
+        def jacobian(Yp_flat):
+            # reshape flat input to stage derivatives
+            Yp = Yp_flat.copy().reshape(self.stages, -1)
+
+            # compute stage solutions
+            Y = y.copy() + self.dt * self.A.dot(Yp)
+
+            Jy_i, Jyp_i = self.jac(tau[0], Y[0], Yp[0])
+
+            # global Newton matrix
+            # J = np.zeros((self.stages * n, self.stages * n))
+            k = 0
+            for i in range(self.stages):
+                # # Jyp_i, Jy_i = self.jac(tau[i], Y[i], Yp[i])
+                # Jy_i, Jyp_i = self.jac(tau[i], Y[i], Yp[i])
+
+                row = slice(i * n, (i + 1) * n)
+                for j in range(self.stages):
+                    col = slice(j * n, (j + 1) * n)
+                    block = self.dt * self.A[i, j] * Jy_i.toarray()
+                    if i == j:
+                        block = block + Jyp_i.toarray()
+
+                    self.J_coo[k, row, col] = block
+                    k += 1
+
+            return self.J_coo.tocsc(fix_size=True)
+        
+        Yp0 = np.tile(yp, self.stages)
+        sol = fsolve(
+            residual, 
+            Yp0, 
+            jac=jacobian,
+            inexact=True,
+            # options=SolverOptions(numerical_jacobian_method="2-point"),
+        )
+        return sol
+
     def solve(self):
-        solver_summary = SolverSummary(f"Scipy solve_dae with method '{self.method}'")
+        solver_summary = SolverSummary(f"Fixed step-size Radau")
+
+        # lists storing output variables
+        qn1, un1, _, _, _, _ = np.array_split(self.y0, self.split)
+        q_dotn1, u_dotn1, mu_gn1, la_gn1, la_gamman1, la_cn1 = np.array_split(self.y_dot0, self.split)
+        q = [qn1.copy()]
+        u = [un1.copy()]
+        la_g = [la_gn1.copy()]
+        la_gamma = [la_gamman1.copy()]
+        la_c = [la_cn1.copy()]
+
+        t = self.t0
+        y = self.y0.copy()
+        yp = self.y_dot0.copy()
+
+        nfrac = 100
+        # pbar = tqdm(self.t[1:], leave=True, mininterval=0.5, miniters=nfrac)
+        # for _ in pbar:
+        for t in self.t[1:]:
+            sol = self.step(t, y.copy(), yp.copy())
+            Yp = sol.x.reshape(self.stages, -1)
+            success = sol.success
+            assert success
+
+            solver_summary.add_lu(sol.njev)
+            solver_summary.add_fixed_point(sol.nit, sol.error)
+
+            Y = y.copy() + self.dt * self.A.dot(Yp)
+            y = Y[-1].copy()
+            yp = Yp[-1].copy()
+
+            qn1, un1, _, _, _, _ = np.array_split(y, self.split)
+            q_dotn1, u_dotn1, mu_gn1, la_gn1, la_gamman1, la_cn1 = np.array_split(yp, self.split)
+
+            # t += self.dt
+            # qn1, un1 = self.system.step_callback(t, qn1, un1)
+            # y[:self.nq] = qn1.copy()
+
+            q.append(qn1)
+            u.append(un1)
+            la_g.append(la_gn1)
+            la_gamma.append(la_gamman1)
+            la_c.append(la_cn1)
+        
+        return Solution(
+            self.system,
+            t=np.array(self.t),
+            q=np.array(q),
+            u=np.array(u),
+            la_g=np.array(la_g),
+            la_gamma=np.array(la_gamma),
+            la_c=np.array(la_c),
+            solver_summary=solver_summary,
+        )
+
+
         sol = solve_dae(
             self.fun,
             # self.t_eval[[0, -1]],

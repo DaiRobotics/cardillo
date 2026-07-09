@@ -9,7 +9,7 @@ from cardillo.rods import (
     CrossSectionInertias,
     Simo1986,
 )
-from cardillo.solver import ScipyDAE, Moreau
+from cardillo.solver import ScipyDAE, Moreau, Radau
 
 nelement = 10
 L = 10
@@ -55,7 +55,8 @@ system = System()
 system.add(rod, force, moment)
 system.assemble()
 
-solver = ScipyDAE(system, 15, 1e-1, rtol=1e-3, atol=1e-6)
+# solver = ScipyDAE(system, 15, 1e-1, rtol=1e-3, atol=1e-6)
+solver = Radau(system, 5, 5e-3, rtol=1e-3, atol=1e-6, stages=3)
 sol = solver.solve()
 
 t = sol.t
