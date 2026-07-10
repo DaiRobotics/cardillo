@@ -284,8 +284,8 @@ def setpoint_trajectory_as():
     
     
     # Hold Schedule
-    t_move = 3.0    
-    t_hold = 0.0
+    t_move = 0.5    
+    t_hold = 9.5
     la_t_ref_hold, ts2 = add_segment_holds(la_t_ref, segment_length=1, t_move=t_move, t_hold=t_hold)
     t_sim = ts2[-1]
 
@@ -307,7 +307,7 @@ def setpoint_trajectory_as():
     ## ------- Reference Trajectory r_OP_ref --------
     print("calc E to A")
     # TODO interpolate the force manually, and set ret_all_steps=False
-    force_steps = 30 # Normally 50 force steps
+    force_steps = 50 # Normally 50 force steps
     sol, x, solver = static_model.apply_forces(
         la_t_ref0, force_steps=force_steps, ret_all_steps=True, verbose=True
     )
@@ -332,7 +332,7 @@ def setpoint_trajectory_as():
     Kp = 0.5
     Kd = 0.0
     dynamic_model = DynamicModel(
-        t_sim, Kp, Kd, Gamma0, la_t_fb0, r_OP_ref_fn, la_t_ref_fn, q0, damping_ratio=0.0
+        t_sim, Kp, Kd, Gamma0, la_t_fb0, r_OP_ref_fn, la_t_ref_fn, q0, damping_ratio=0.3
     )
     sol = dynamic_model.solver.solve()
     print(Kp, Kd)

@@ -162,58 +162,102 @@ class TendonForceControl:
         self.nq = len(tendons)
         self.q0 = np.zeros(self.nq)
         self._la_t_dot = np.zeros(self.nq)
-
+    
     def assembler_callback(self):
         self.qDOF = np.concatenate([self.my_qDOF, self.rod.qDOF])
         self._nq1 = len(self.my_qDOF)
         self.uDOF = self.rod.uDOF
 
-    def step_callback(self, t, q, u):
-        # la_t_ref_target = self.la_t_ref(t)
+    def apply_tendon_forces(self, t, q):
+        la_t = q[: self._nq1] + self.la_t_ref(t)
+        for td, la_t_i in zip(self.tendons, la_t):
+            td.set_force(lambda t, la=la_t_i: la)
+
+    def control_law(self, t, q, u):
         r_OP_ref = self.r_OP_ref(t)
         v_P_ref = np.zeros(3)
-
-        # Recompute gamma
+        r_OP = self.rod._view_nodal_q(q[self._nq1 :])[-1, :3]
+        v_P = self.rod._view_nodal_u(u)[-1, :3]
+        delta_r_OP = r_OP_ref - r_OP
+        delta_v_P = v_P_ref - v_P
+        return self.Gamma_inv @ (self.Kp * delta_r_OP + self.Kd * delta_v_P)
+    
+    def q_dot(self, t, q, u):
+        self.apply_tendon_forces(t, q)
+        return self.control_law(t, q, u)
+    
+    def step_callback(self, t, q, u):
+    # expensive Gamma refresh, time-gated — stays at the step level
         if (
             self.static_model is not None
             and t - self.last_gamma_check_t >= self.gamma_check_dt
         ):
             self.last_gamma_check_t = t
-            lambda_cur = np.clip(
-                np.asarray(q[: self._nq1], dtype=float), 0.0, 50.0
-            )
-            # lambda_cur = np.clip(
-            #     np.asarray(q[: self._nq1], dtype=float), lambda_t_min, lambda_t_max
-            # )
+            lambda_cur = np.clip(np.asarray(q[: self._nq1], dtype=float), 0.0, 50.0)
             try:
-                # q_rod_cur = np.asarray(q[self._nq1 :], dtype=float)
-                Gamma_cur, _, __ = eval_gamma(
-                    self.static_model, lambda_cur
-                )
+                Gamma_cur, _, __ = eval_gamma(self.static_model, lambda_cur)
                 dGamma = Gamma_cur - self.Gamma
-                # print(Gamma_cur)
                 if (
                     np.linalg.norm(dGamma @ np.linalg.pinv(self.Gamma), 2)
                     >= self.gamma_eps
-                ):  # Gamma0 no longer valid -> refresh
+                ):
                     self.Gamma = Gamma_cur
-                    self.Gamma_inv = self.Gamma.T @ np.linalg.solve(self.Gamma @ self.Gamma.T, np.eye(self.Gamma.shape[0]))
+                    self.Gamma_inv = self.Gamma.T @ np.linalg.solve(
+                        self.Gamma @ self.Gamma.T, np.eye(self.Gamma.shape[0])
+                    )
             except Exception as e:
                 print(e)
-
-        r_OP = self.rod._view_nodal_q(q[self._nq1 :])[-1, :3]
-        delta_r_OP = r_OP_ref - r_OP
-        v_P = self.rod._view_nodal_u(u)[-1, :3]
-        delta_v_P = v_P_ref - v_P
-        self._la_t_dot = self.Gamma_inv @ (self.Kp * delta_r_OP + self.Kd * delta_v_P)
-        la_t_fb = q[: self._nq1]
-        la_t = la_t_fb + self.la_t_ref(t)
-        for td, la_t_i in zip(self.tendons, la_t):
-            td.set_force(lambda t, la=la_t_i: la)
+        # commit the force for the accepted state too
+        self.apply_tendon_forces(t, q)
         return q, u
+    
+    ## OLD CODE
+    # def step_callback(self, t, q, u):
+    #     # la_t_ref_target = self.la_t_ref(t)
+    #     r_OP_ref = self.r_OP_ref(t)
+    #     v_P_ref = np.zeros(3)
 
-    def q_dot(self, t, q, u):
-        return self._la_t_dot
+    #     # Recompute gamma
+    #     if (
+    #         self.static_model is not None
+    #         and t - self.last_gamma_check_t >= self.gamma_check_dt
+    #     ):
+    #         self.last_gamma_check_t = t
+    #         lambda_cur = np.clip(
+    #             np.asarray(q[: self._nq1], dtype=float), 0.0, 50.0
+    #         )
+    #         # lambda_cur = np.clip(
+    #         #     np.asarray(q[: self._nq1], dtype=float), lambda_t_min, lambda_t_max
+    #         # )
+    #         try:
+    #             # q_rod_cur = np.asarray(q[self._nq1 :], dtype=float)
+    #             Gamma_cur, _, __ = eval_gamma(
+    #                 self.static_model, lambda_cur
+    #             )
+    #             dGamma = Gamma_cur - self.Gamma
+    #             # print(Gamma_cur)
+    #             if (
+    #                 np.linalg.norm(dGamma @ np.linalg.pinv(self.Gamma), 2)
+    #                 >= self.gamma_eps
+    #             ):  # Gamma0 no longer valid -> refresh
+    #                 self.Gamma = Gamma_cur
+    #                 self.Gamma_inv = self.Gamma.T @ np.linalg.solve(self.Gamma @ self.Gamma.T, np.eye(self.Gamma.shape[0]))
+    #         except Exception as e:
+    #             print(e)
+
+    #     r_OP = self.rod._view_nodal_q(q[self._nq1 :])[-1, :3]
+    #     delta_r_OP = r_OP_ref - r_OP
+    #     v_P = self.rod._view_nodal_u(u)[-1, :3]
+    #     delta_v_P = v_P_ref - v_P
+    #     self._la_t_dot = self.Gamma_inv @ (self.Kp * delta_r_OP + self.Kd * delta_v_P)
+    #     la_t_fb = q[: self._nq1]
+    #     la_t = la_t_fb + self.la_t_ref(t)
+    #     for td, la_t_i in zip(self.tendons, la_t):
+    #         td.set_force(lambda t, la=la_t_i: la)
+    #     return q, u
+
+    # def q_dot(self, t, q, u):
+    #     return self._la_t_dot
 
 
 class StaticSolver(Newton):
@@ -513,12 +557,12 @@ class DynamicModel(CommonModel):
             self.system.set_new_initial_state(
                 np.concatenate((q0, la_t_fb0)), np.zeros(self.system.nu)
             )
-        self.solver = BackwardEuler(
-            self.system,
-            t1=t_sim,
-            dt=1e-2,
-        )
-        # self.solver = ScipyDAE(self.system, t1=t_sim, dt=1e-2)
+        # self.solver = BackwardEuler(
+        #     self.system,
+        #     t1=t_sim,
+        #     dt=1e-2,
+        # )
+        self.solver = ScipyDAE(self.system, t1=t_sim, dt=1e-2)
 
 def add_segment_holds(traj_values, segment_length, t_move, t_hold):
     traj_values = np.asarray(traj_values)
