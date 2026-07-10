@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.sparse import eye_array
-from solve_dae.integrate import solve_dae
+from scipy_dae.integrate import solve_dae
 from tqdm import tqdm
 
 from cardillo.solver import Solution, SolverSummary
