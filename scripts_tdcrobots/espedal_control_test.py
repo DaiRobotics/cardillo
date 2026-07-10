@@ -267,7 +267,7 @@ def setpoint_trajectory_ts():
 
 ## Interpolation in Actuator Space
 def setpoint_trajectory_as():
-    t_sim = 50 # Comment out if using hold_schedule
+    # t_sim = 50 # Comment out if using hold_schedule
 
     la_t_A = np.array([0.73792114, 3.17753766, 0.0, 0.0])
     la_t_B = np.array([2.28280023, 3.48103006, 3.38276666, 1.28709287])
@@ -284,12 +284,16 @@ def setpoint_trajectory_as():
     
     
     # Hold Schedule
-    la_t_ref_hold, ts2 = add_segment_holds(la_t_ref, segment_length=1, t_move=5.0, t_hold=5.0)
-    
+    t_move = 3.0    
+    t_hold = 0.0
+    la_t_ref_hold, ts2 = add_segment_holds(la_t_ref, segment_length=1, t_move=t_move, t_hold=t_hold)
+    t_sim = ts2[-1]
+
     def la_t_ref_fn(t):
         # return np.array([interp1d(ts2, la_t_ref[:, i], t) for i in range(4)])
         # return np.array([interp1d_poly(ts2, la_t_ref[:, i], t) for i in range(4)])
-        return np.array([interp1d(ts2, la_t_ref_hold[:, i], t) for i in range(4)]) # FIX
+        # return np.array([interp1d(ts2, la_t_ref_hold[:, i], t) for i in range(4)])
+        return np.array([interp1d_poly(ts2, la_t_ref_hold[:, i], t) for i in range(4)])
     
     la_t_fb0 = la_t_E
     
@@ -303,7 +307,7 @@ def setpoint_trajectory_as():
     ## ------- Reference Trajectory r_OP_ref --------
     print("calc E to A")
     # TODO interpolate the force manually, and set ret_all_steps=False
-    force_steps = 50
+    force_steps = 30 # Normally 50 force steps
     sol, x, solver = static_model.apply_forces(
         la_t_ref0, force_steps=force_steps, ret_all_steps=True, verbose=True
     )
@@ -314,118 +318,47 @@ def setpoint_trajectory_as():
     # def ref traj
     # ts = np.linspace(0, t_sim, len(r_OP_ref))
 
-    r_OP_ref_hold, ts = add_segment_holds(r_OP_ref, segment_length=force_steps, t_move=5.0, t_hold=5.0)
+    r_OP_ref_hold, ts = add_segment_holds(r_OP_ref, segment_length=force_steps, t_move=t_move, t_hold=t_hold)
 
     def r_OP_ref_fn(t):
         # return np.array([interp1d(ts, r_OP_ref[:, i], t) for i in range(3)])
         # return np.array([interp1d_poly(ts, r_OP_ref[:, i], t) for i in range(3)]) # Not needed
         return np.array([interp1d(ts, r_OP_ref_hold[:, i], t) for i in range(3)])
+        # return np.array([interp1d_poly(ts, r_OP_ref_hold[:, i], t) for i in range(3)])
 
 
     ## -------- Dynamic Solve --------
     print("dynamic control:")
-    Kp = 0
-    Kd = 0
+    Kp = 0.5
+    Kd = 0.0
     dynamic_model = DynamicModel(
         t_sim, Kp, Kd, Gamma0, la_t_fb0, r_OP_ref_fn, la_t_ref_fn, q0, damping_ratio=0.0
     )
     sol = dynamic_model.solver.solve()
     print(Kp, Kd)
 
+    visualization_p2p(dynamic_model, sol, r_OP_ref_fn)
 
-    # ---- visualization ----
-    rod = dynamic_model.rod
-    tendons = dynamic_model.tendons
-    system = dynamic_model.system
+def falling_test():
+    t_sim = 10
 
-    from cardillo.visualization import Plotter, VisualDiscreteRod, VisualTendon
+    # full-row-rank placeholder so the controller can form Gamma_inv;
+    # value is irrelevant because Kp = Kd = 0.
+    Gamma0 = np.hstack([np.eye(3), np.zeros((3, 1))])
 
-    VisualDiscreteRod(rod, subdivision=4, opacity=0.3)
-    for tendon in tendons:
-        VisualTendon(tendon, radius=1e-3, color=(0, 200, 50))
+    la_t0 = np.zeros(4)                        # no tendon force at t=0
+    def r_OP_ref_fn(t): return np.zeros(3)     # unused (no feedback)
+    def la_t_ref_fn(t): return np.zeros(4)     # no feedforward force
 
-    window_size = (960, 540)
-    plotter = Plotter(system, window_size)
-    plotter.add_ground(-0.2, 0.2, -0.2, 0.2, 10, 10)
-    r_OF = np.array([0, -0.05, 0.10], float)
-    r_OC = r_OF + np.array([0, 0, 0.45], float)
-    e_x_cam = np.array([1, 0, 0], float)
-    e_z_cam = r_OF - r_OC
-    e_z_cam /= np.linalg.norm(e_z_cam)
-    e_y_cam = np.cross(e_z_cam, e_x_cam)
-    fx = 2635.5177
-    px, py = 3840, 2160
-    cam = plotter.camera
-    cam.view_angle = np.rad2deg(np.arctan(min(px, py) / 2 / fx) * 2)
-    cam.parallel_projection = False
-    cam.position = r_OC
-    cam.focal_point = r_OF
-    cam.view_up = -e_y_cam
-    cam.clipping_range = (0.01, 2)
-    cam.Zoom(1)
-
-    # plotter.live_render()
-    plotter.render_solution(sol, True, play_speed_up=1)
-
-    from matplotlib import pyplot as plt
-
-    t = sol.t
-    q = sol.q[:, rod.qDOF].reshape((-1, rod.nnode, 7))
-    r_OP_ref = np.array([r_OP_ref_fn(ti) for ti in t])
-    r_OP = q[:,-1, 0:3]
-    e = r_OP_ref - r_OP
-    e_n = np.array([np.linalg.norm(e[i]) for i in range(len(e))])
-
-   # ---- Point to Point plots ----
-    fig = plt.figure(figsize=(8,6))
-    gs = fig.add_gridspec(3, 1)
-
-    atx = fig.add_subplot(gs[0, 0])
-    atx.plot(t, q[:, -1, 0], "r", label="actual")
-    atx.plot(t, r_OP_ref[:, 0], "b--", label="desired")
-    atx.set_xlabel("Time [s]")
-    atx.set_ylabel("X [m]")
-    atx.legend()
-    atx.grid(True)
-
-    aty = fig.add_subplot(gs[1, 0])
-    aty.plot(t, q[:, -1, 1], "r", label="actual")
-    aty.plot(t, r_OP_ref[:, 1], "b--", label="desired")
-    aty.set_xlabel("Time [s]")
-    aty.set_ylabel("Y [m]")
-    aty.legend()
-    aty.grid(True)
-
-    atz = fig.add_subplot(gs[2, 0])
-    atz.plot(t, q[:, -1, 2], "r", label="actual")
-    atz.plot(t, r_OP_ref[:, 2], "b--", label="desired")
-    atz.set_xlabel("Time [s]")
-    atz.set_ylabel("Z [m]")
-    atz.legend()
-    atz.grid(True)
-
-
-    fig.suptitle(f"Tip Trajectory Tracking (E to A)")
-    fig.tight_layout()
-
-
-    fig2, ax = plt.subplots(4, 1, figsize=(8, 8), sharex=True)
-    for i, lbl in enumerate(("e_x", "e_y", "e_z")):
-        ax[i].plot(t, e[:, i], "r")
-        ax[i].set_ylabel(rf"${lbl}$ [m]")
-        ax[i].grid(True)
-
-    ax[3].plot(t, e_n, "k")              
-    ax[3].set_ylabel(r"$e_{norm}$ [m]")
-    ax[3].grid(True)
-
-    ax[-1].set_xlabel("Time [s]")          
-    fig2.suptitle("Tracking Error per Direction (E to A)")
-    fig2.tight_layout()
-
-    plt.show()
-
-
+    Kp = 0.0
+    Kd = 0.0
+    dynamic_model = DynamicModel(
+        t_sim, Kp, Kd, Gamma0, la_t0, r_OP_ref_fn, la_t_ref_fn,
+        q0=None,                # <-- start from the straight initial configuration
+        damping_ratio=0.0,
+    )
+    sol = dynamic_model.solver.solve()
+    visualization_p2p(dynamic_model, sol, r_OP_ref_fn)
 
 if __name__ == "__main__":
     # create_zy_circle_csv(N=50)
@@ -438,3 +371,4 @@ if __name__ == "__main__":
     # setpoint_table_csv()
     # setpoint_trajectory_ts()
 
+    # falling_test()

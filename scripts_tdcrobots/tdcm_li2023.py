@@ -432,8 +432,8 @@ class StaticModel(CommonModel):
         # -----------
         _forces = np.vstack((self.la_t_init, forces))
         for i, tendon in enumerate(self.tendons):
-            tendon.set_force(lambda t, i=i: interp1d(ts, _forces[:, i], t))
-            # tendon.set_force(lambda t, i=i: interp1d_poly(ts, _forces[:, i], t))
+            # tendon.set_force(lambda t, i=i: interp1d(ts, _forces[:, i], t))
+            tendon.set_force(lambda t, i=i: interp1d_poly(ts, _forces[:, i], t))
         # ------------
         #   Gravity
         # ------------
@@ -520,53 +520,7 @@ class DynamicModel(CommonModel):
         )
         # self.solver = ScipyDAE(self.system, t1=t_sim, dt=1e-2)
 
-def hold_schedule(la_t_refs, t_transit, t_hold, hold_first=False, hold_last=False):
-    # Creates a schedule for how long each position should be held for
-    # r_OP_refs can be used instead of la_t_refs
-    times, vals = [], []
-    t = 0.0
-    last = len(la_t_refs) - 1
-    for i, la_t_ref in enumerate(la_t_refs):
-        if i > 0:
-            t += t_transit
-        times.append(t)
-        vals.append(la_t_ref)
-
-        hold = t_hold
-        if i == 0 and not hold_first:
-            hold = 0.0
-        if i == last and not hold_last:
-            hold = 0.0
-        if hold > 0.0:
-            t += hold
-            times.append(t)
-            vals.append(la_t_ref)
-    return np.array(times), np.array(vals)
-
 def add_segment_holds(traj_values, segment_length, t_move, t_hold):
-    """
-    Add a hold after each trajectory segment.
-
-    Parameters
-    ----------
-    traj_values : (N, d) array
-        Trajectory values.
-    segment_length : int
-        Number of samples in each motion segment.
-        - la_t_ref: 1
-        - r_OP_ref: force_steps
-    t_move : float
-        Time to move between waypoints.
-    t_hold : float
-        Time to hold after arriving.
-
-    Returns
-    -------
-    traj_values_new : ndarray
-        Trajectory with duplicated endpoints for holds.
-    times : ndarray
-        Corresponding timestamps.
-    """
     traj_values = np.asarray(traj_values)
 
     traj_values_new = [traj_values[0]]
@@ -581,11 +535,7 @@ def add_segment_holds(traj_values, segment_length, t_move, t_hold):
         segment = traj_values[idx:idx + segment_length]
 
         # equally spaced times during the motion
-        segment_times = np.linspace(
-            t,
-            t + t_move,
-            len(segment) + 1
-        )[1:]
+        segment_times = np.linspace(t, t + t_move, len(segment) + 1)[1:]
 
         traj_values_new.extend(segment)
         times.extend(segment_times)
@@ -602,6 +552,7 @@ def add_segment_holds(traj_values, segment_length, t_move, t_hold):
     return np.asarray(traj_values_new), np.asarray(times)
 
 def visualization_p2p(dynamic_model, sol, r_OP_ref_fn):
+    # ---- visualization ----
     rod = dynamic_model.rod
     tendons = dynamic_model.tendons
     system = dynamic_model.system
@@ -615,9 +566,9 @@ def visualization_p2p(dynamic_model, sol, r_OP_ref_fn):
     window_size = (960, 540)
     plotter = Plotter(system, window_size)
     plotter.add_ground(-0.2, 0.2, -0.2, 0.2, 10, 10)
-    r_OF = np.array([0, -0.02, 0.10], float)
-    r_OC = r_OF + np.array([0.45, 0, 0], float)
-    e_x_cam = np.array([0, 0, 1], float)
+    r_OF = np.array([0, -0.05, 0.10], float)
+    r_OC = r_OF + np.array([0, 0, 0.45], float)
+    e_x_cam = np.array([1, 0, 0], float)
     e_z_cam = r_OF - r_OC
     e_z_cam /= np.linalg.norm(e_z_cam)
     e_y_cam = np.cross(e_z_cam, e_x_cam)
@@ -691,7 +642,7 @@ def visualization_p2p(dynamic_model, sol, r_OP_ref_fn):
     fig2.suptitle("Tracking Error per Direction (E to A)")
     fig2.tight_layout()
 
-    plt.show()    
+    plt.show()
 
 # ----- controller parameters -----
 la_t_min = 0.0
