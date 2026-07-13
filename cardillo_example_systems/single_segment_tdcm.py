@@ -1,10 +1,10 @@
 import numpy as np
-from time import perf_counter
 
 from cardillo.constraints import RigidConnection
 from cardillo.forces import Force
 from cardillo.rods.force_line_distributed import Force_line_distributed
 
+from cardillo.system import System
 from cardillo.rods import (
     CircularCrossSection,
     CrossSectionInertias,
@@ -13,10 +13,8 @@ from cardillo.rods import (
     RodTendonForce,
 )
 
-from cardillo.solver import Newton
-from cardillo.system import System
 
-if __name__ == "__main__":
+def gen_single_segment_tdcm(live_plotter=False):
     ##################
     ## build system ##
     ##################
@@ -136,110 +134,89 @@ if __name__ == "__main__":
     system.add(rc1)
 
     system.assemble()
-    force_init = np.array([td.la(0) for td in tendons])
 
-    ############
-    ## solver ##
-    ############
-    solver = Newton(
-        system,
-        n_load_steps=100,
-        verbose=True,
-    )
+    if live_plotter:
+        # ---- visual objects ----
+        from cardillo.visualization import (
+            Plotter,
+            VisualDiscreteRod,
+            VisualSTL,
+            # VisualCoordSystem,
+            VisualTendon,
+            VisualArUco,
+        )
 
-    solver.fun(solver.x[0], system.t0)
-    solver.jac(solver.x[0], system.t0)
+        VisualArUco(
+            rod,
+            xi=1,
+            mk_size=0.04,
+            mk_dis=0.05,
+            A_BM=rod_A_IB0.T,
+            B_r_CP=rod_A_IB0.T
+            @ np.array([0, 0, connector_h + mk_platform_h - mk_platform_cut_h]),
+        )
 
-    # from cProfile import Profile
-    # prof = Profile()
-    # prof.enable()
+        VisualSTL(
+            rod,
+            "scripts_tdcrobots/stl/Segment_Foot_V2.stl",
+            xi=1,
+            A_BM=rod_A_IB0.T,
+            B_r_CP=rod_A_IB0.T @ np.array([0, 0, connector_h / 2]),
+            scale=1e-3,
+            color=(160, 160, 160),
+        )
+        VisualSTL(
+            rod,
+            "scripts_tdcrobots/stl/Marker_Platform_Target_V2.stl",
+            xi=1,
+            B_r_CP=rod_A_IB0.T @ np.array([0, 0, connector_h - mk_platform_cut_h]),
+            A_BM=rod_A_IB0.T,
+            scale=1e-3,
+            color=(255, 250, 240),
+        )
+        VisualSTL(
+            system.origin,
+            "scripts_tdcrobots/stl/Segment_Foot_V2.stl",
+            B_r_CP=np.array([0, 0, connector_h - mk_platform_cut_h / 2]),
+            scale=1e-3,
+            color=(160, 160, 160),
+        )
+        VisualDiscreteRod(rod, subdivision=4)
+        for tendon in tendons:
+            VisualTendon(tendon, radius=1e-3, color=(0, 200, 50))  # (130, 130, 130),
+        # VisualCoordSystem(system.origin, 0.05)
+        # ---- plotter ----
+        window_size = (960, 540)
+        plotter = Plotter(system, window_size)
+        x0, x1 = -0.2, 0.2
+        y0, y1 = -0.2, 0.2
+        res_x = res_y = 10
+        plotter.add_ground(x0, x1, y0, y1, res_x, res_y)
+        # ---- camera pose ----
+        r_OC = np.array([0, -0.35, 0.1], float)
+        # r_OC = np.array([0, -0.35, 0.15], float)
+        r_OF = np.array([0, 0, 0.06], float)  # camera focal point
+        e_x_cam = np.array([1, 0, 0], float)
+        e_z_cam = r_OF - r_OC
+        e_z_cam /= np.linalg.norm(e_z_cam)
+        e_y_cam = np.cross(e_z_cam, e_x_cam)
+        zoom = 1
+        # zoom = 1.5
+        fx = fy = 2635.5177
+        px, py = 3840, 2160  # camera 4k resolution
+        cam_view_angle = np.rad2deg(np.arctan(min(px, py) / 2 / fx) * 2)
+        cam = plotter.camera
+        cam.view_angle = cam_view_angle
+        cam.parallel_projection = False
+        cam.position = r_OC
+        cam.focal_point = r_OF
+        cam.view_up = -e_y_cam
+        cam.clipping_range = (0.01, 1)
+        cam.Zoom(zoom)
 
-    t0 = perf_counter()
-    sol = solver.solve()
-    print("time:", perf_counter() - t0)
-
-    # prof.disable()
-    # prof.dump_stats("prof.prof")
-    # exit()
-    #################
-    # visualization #
-    #################
-    # ---- visual objects ----
-    from cardillo.visualization import (
-        Plotter,
-        VisualDiscreteRod,
-        VisualSTL,
-        # VisualCoordSystem,
-        VisualTendon,
-        VisualArUco,
-    )
-
-    VisualArUco(
-        rod,
-        xi=1,
-        mk_size=0.04,
-        mk_dis=0.05,
-        A_BM=rod_A_IB0.T,
-        B_r_CP=rod_A_IB0.T
-        @ np.array([0, 0, connector_h + mk_platform_h - mk_platform_cut_h]),
-    )
-
-    VisualSTL(
-        rod,
-        "scripts_tdcrobots/stl/Segment_Foot_V2.stl",
-        xi=1,
-        A_BM=rod_A_IB0.T,
-        B_r_CP=rod_A_IB0.T @ np.array([0, 0, connector_h / 2]),
-        scale=1e-3,
-        color=(160, 160, 160),
-    )
-    VisualSTL(
-        rod,
-        "scripts_tdcrobots/stl/Marker_Platform_Target_V2.stl",
-        xi=1,
-        B_r_CP=rod_A_IB0.T @ np.array([0, 0, connector_h - mk_platform_cut_h]),
-        A_BM=rod_A_IB0.T,
-        scale=1e-3,
-        color=(255, 250, 240),
-    )
-    VisualSTL(
-        system.origin,
-        "scripts_tdcrobots/stl/Segment_Foot_V2.stl",
-        B_r_CP=np.array([0, 0, connector_h - mk_platform_cut_h / 2]),
-        scale=1e-3,
-        color=(160, 160, 160),
-    )
-    VisualDiscreteRod(rod, subdivision=4)
-    for tendon in tendons:
-        VisualTendon(tendon, radius=1e-3, color=(0, 200, 50))  # (130, 130, 130),
-    # VisualCoordSystem(system.origin, 0.05)
-    # ---- plotter ----
-    window_size = (960, 540)
-    plotter = Plotter(system, window_size)
-    x0, x1 = -0.2, 0.2
-    y0, y1 = -0.2, 0.2
-    res_x = res_y = 10
-    plotter.add_ground(x0, x1, y0, y1, res_x, res_y)
-    # ---- camera pose ----
-    r_OC = np.array([0, -0.35, 0.1], float)
-    # r_OC = np.array([0, -0.35, 0.15], float)
-    r_OF = np.array([0, 0, 0.06], float)  # camera focal point
-    e_x_cam = np.array([1, 0, 0], float)
-    e_z_cam = r_OF - r_OC
-    e_z_cam /= np.linalg.norm(e_z_cam)
-    e_y_cam = np.cross(e_z_cam, e_x_cam)
-    zoom = 1
-    # zoom = 1.5
-    fx = fy = 2635.5177
-    px, py = 3840, 2160  # camera 4k resolution
-    cam_view_angle = np.rad2deg(np.arctan(min(px, py) / 2 / fx) * 2)
-    cam = plotter.camera
-    cam.view_angle = cam_view_angle
-    cam.parallel_projection = False
-    cam.position = r_OC
-    cam.focal_point = r_OF
-    cam.view_up = -e_y_cam
-    cam.clipping_range = (0.01, 1)
-    cam.Zoom(zoom)
-
-    plotter.render_solution(sol, True)
+    return {
+        "system": system,
+        "rod": rod,
+        "tendons": tendons,
+        "plotter": plotter if live_plotter else None,
+    }

@@ -3,89 +3,28 @@ import numpy as np
 import scipy
 from scipy.integrate import solve_ivp
 
+
 from matplotlib import pyplot as plt
 
+from cardillo.utility.jax_cache_config import configure_cache
+
+configure_cache("run_rk_flying_spaghetti")
+
 from cardillo.solver import ScipyDAE, Solution
-from cardillo.example_systems.flying_spaghetti import *
+from cardillo.solver.runge_kutta import runge_kutta_4, runge_kutta_3_8
+from cardillo_example_systems.flying_spaghetti import gen_flying_spaghetti, x_ref
 
-
-def runge_kutta_4(dydt, y0, t0, tf, h):
-    n = int((tf - t0) / h)
-
-    t = np.zeros(n + 1)
-    y = np.zeros((n + 1, len(y0)))
-
-    t[0] = t0
-    y[0] = y0
-
-    for i in range(n):
-        k1 = h * dydt(t[i], y[i])
-        k2 = h * dydt(t[i] + 0.5 * h, y[i] + 0.5 * k1)
-        k3 = h * dydt(t[i] + 0.5 * h, y[i] + 0.5 * k2)
-        k4 = h * dydt(t[i] + h, y[i] + k3)
-
-        y[i + 1] = y[i] + (k1 + 2 * k2 + 2 * k3 + k4) / 6
-        t[i + 1] = t[i] + h
-
-        q = y[i + 1][:nq]
-        u = y[i + 1][nq:]
-        system.step_callback(t, q, u)
-
-    return t, y
-
-
-def runge_kutta_3_8(dydt, y0, t0, tf, h):
-    n = int((tf - t0) / h)
-
-    t = np.zeros(n + 1)
-    y = np.zeros((n + 1, len(y0)))
-
-    t[0] = t0
-    y[0] = y0
-
-    f13 = 1 / 3
-    f23 = 2 / 3
-    for i in range(n):
-        k1 = h * dydt(t[i], y[i])
-        k2 = h * dydt(t[i] + f13 * h, y[i] + f13 * k1)
-        k3 = h * dydt(t[i] + f23 * h, y[i] - f13 * k1 + k2)
-        k4 = h * dydt(t[i] + h, y[i] + k1 - k2 + k3)
-
-        y[i + 1] = y[i] + (k1 + 3 * k2 + 3 * k3 + k4) / 8
-        t[i + 1] = t[i] + h
-
-        q = y[i + 1][:nq]
-        u = y[i + 1][nq:]
-        system.step_callback(t, q, u)
-
-    return t, y
-
-
-def dydt(t, y):
-    q, u = y[:nq], y[nq:]
-    t = float(t)
-
-    q_dot = rod.q_dot(t, q, u)
-
-    W_c = rod.W_c(t, q).asformat("csr")
-    la_c = rod.la_c(t, q, u)
-    h = W_c @ la_c + system.h(t, q, u)
-
-    u_dot = M_inv @ h
-    return np.concatenate((q_dot, u_dot))
-
-
-nq = system.nq
-t0, q0, u0 = system.t0, system.q0, system.u0
-y0 = np.concatenate((q0, u0))
-M_inv = scipy.sparse.linalg.inv(system.M(t0, q0).tocsc())
-
-
-# warm start
-dydt(t0, y0)
-
+##############
+# Setup system
+##############
 tsim = 7.0
 dt = 1e-2
+nelement = 10
+ret = gen_flying_spaghetti(nelement=nelement)
+system = ret["system"]
+rod = ret["rod"]
+t0 = system.t0
+
 #################
 # ScipyDAE solver
 #################
@@ -100,9 +39,38 @@ print(f"ScipyDAE time: {perf_counter() - t1:.2f} s")
 ####################
 # Runge Kutta solver
 ####################
+nq = system.nq
+q0, u0 = system.q0, system.u0
+y0 = np.concatenate((q0, u0))
+M_inv = scipy.sparse.linalg.inv(system.M(t0, q0).tocsc())
+
+
+def step_callback(t, y):
+    q = y[:nq]
+    u = y[nq:]
+    system.step_callback(t, q, u)
+
+
+def dydt(t, y):
+    q, u = y[:nq], y[nq:]
+    t = float(t)
+
+    q_dot = rod.q_dot(t, q, u)
+
+    W_c = rod.W_c(t, q).tocsr(fix_size=True)
+    la_c = rod.la_c(t, q, u)
+    h = W_c @ la_c + system.h(t, q, u)
+
+    u_dot = M_inv @ h
+    return np.concatenate((q_dot, u_dot))
+
+
+# warm start
+dydt(t0, y0)
+
 t1 = perf_counter()
-# t, y =runge_kutta_4(dydt, y0, 0, tsim, dt)
-t, y = runge_kutta_3_8(dydt, y0, 0, tsim, dt)
+# t, y =runge_kutta_4(dydt, y0, 0, tsim, dt, step_callback=step_callback)
+t, y = runge_kutta_3_8(dydt, y0, 0, tsim, dt, step_callback=step_callback)
 
 # sol_ivp = solve_ivp(dydt, (0, tsim), y0, method='RK45', t_eval=np.arange(0, tsim, dt))
 # t, y = sol_ivp.t, sol_ivp.y.T

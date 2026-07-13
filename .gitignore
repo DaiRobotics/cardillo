@@ -10,6 +10,9 @@ docs/_build
 build/
 public/
 
+#
+.jax_cache/
+
 # pytest
 .pytest_cache/
 *.pyc
