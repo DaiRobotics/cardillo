@@ -15,6 +15,7 @@ from cardillo.rods import (
 )
 
 from cardillo.solver import ScipyDAE, BackwardEuler, Newton, SolverOptions, Solution
+
 from cardillo.system import System
 
 from cardillo.interactions import nPointInteraction
@@ -22,6 +23,8 @@ from cardillo.interactions import nPointInteraction
 import numpy as np
 from scipy.linalg import pinv
 from scipy.sparse.linalg import splu
+from runge_kutta import *
+
 
 
 G_ACCEL = 9.81
@@ -170,6 +173,10 @@ class TendonForceControl:
 
     def apply_tendon_forces(self, t, q):
         la_t = q[: self._nq1] + self.la_t_ref(t)
+        # print(la_t)
+        # if not np.isfinite(la_t).all():      # True if any NaN or inf
+        #     print(f"non-finite la_t at t={t}: {la_t}")
+        #     breakpoint()
         for td, la_t_i in zip(self.tendons, la_t):
             td.set_force(lambda t, la=la_t_i: la)
 
@@ -187,7 +194,8 @@ class TendonForceControl:
         return self.control_law(t, q, u)
     
     def step_callback(self, t, q, u):
-    # expensive Gamma refresh, time-gated — stays at the step level
+    # Gamma check every accepted time step
+        return q, u
         if (
             self.static_model is not None
             and t - self.last_gamma_check_t >= self.gamma_check_dt
@@ -208,9 +216,21 @@ class TendonForceControl:
             except Exception as e:
                 print(e)
         # commit the force for the accepted state too
-        self.apply_tendon_forces(t, q)
+        # self.apply_tendon_forces(t, q)
         return q, u
     
+    def q_dot_q(self, t, q, u):
+        J = np.zeros((self._nq1, len(self.qDOF)))
+        tip_r = self._nq1 + np.arange(7*(self.rod.nnode-1), 7*(self.rod.nnode-1)+3)
+        J[:, tip_r] = -self.Kp * self.Gamma_inv
+        return J
+
+    def q_dot_u(self, t, q):
+        J = np.zeros((self._nq1, len(self.uDOF)))
+        tip_v = np.arange(6*(self.rod.nnode-1), 6*(self.rod.nnode-1)+3)
+        J[:, tip_v] = -self.Kd * self.Gamma_inv
+        return J
+        
     ## OLD CODE
     # def step_callback(self, t, q, u):
     #     # la_t_ref_target = self.la_t_ref(t)
@@ -562,7 +582,24 @@ class DynamicModel(CommonModel):
         #     t1=t_sim,
         #     dt=1e-2,
         # )
-        self.solver = ScipyDAE(self.system, t1=t_sim, dt=1e-2)
+        # self.solver = ScipyDAE(self.system, t1=t_sim, dt=1e-2)
+
+        # fixed_qDOF = self.rod.qDOF[self.rod.nodalDOF[0]]
+        # fixed_uDOF = self.rod.uDOF[self.rod.nodalDOF_u[0]]
+        # self.solver = RungeKutta(
+        #     self.system,
+        #     t1=t_sim,
+        #     dt=1e-3,
+        #     fixed_qDOF=fixed_qDOF,
+        #     fixed_uDOF=fixed_uDOF,
+        # )
+        # self.solver = BDF2(
+        #     self.system,
+        #     t1=t_sim,
+        #     dt=1e-2,          
+        #     fixed_qDOF=fixed_qDOF,
+        #     fixed_uDOF=fixed_uDOF,
+        # )
 
 def add_segment_holds(traj_values, segment_length, t_move, t_hold):
     traj_values = np.asarray(traj_values)
@@ -595,7 +632,7 @@ def add_segment_holds(traj_values, segment_length, t_move, t_hold):
 
     return np.asarray(traj_values_new), np.asarray(times)
 
-def visualization_p2p(dynamic_model, sol, r_OP_ref_fn):
+def rod_visualization(dynamic_model, sol):
     # ---- visualization ----
     rod = dynamic_model.rod
     tendons = dynamic_model.tendons
@@ -630,6 +667,9 @@ def visualization_p2p(dynamic_model, sol, r_OP_ref_fn):
     # plotter.live_render()
     plotter.render_solution(sol, True, play_speed_up=1)
 
+def p2p_vis_plot(dynamic_model, sol, r_OP_ref_fn):
+    rod_visualization(dynamic_model, sol)
+    rod = dynamic_model.rod
     from matplotlib import pyplot as plt
 
     t = sol.t
@@ -640,7 +680,7 @@ def visualization_p2p(dynamic_model, sol, r_OP_ref_fn):
     e_n = np.array([np.linalg.norm(e[i]) for i in range(len(e))])
 
    # ---- Point to Point plots ----
-    fig = plt.figure(figsize=(8,6))
+    fig = plt.figure("XYZ", figsize=(8,6))
     gs = fig.add_gridspec(3, 1)
 
     atx = fig.add_subplot(gs[0, 0])
@@ -672,7 +712,7 @@ def visualization_p2p(dynamic_model, sol, r_OP_ref_fn):
     fig.tight_layout()
 
 
-    fig2, ax = plt.subplots(4, 1, figsize=(8, 8), sharex=True)
+    fig2, ax = plt.subplots(4, 1, num="Error", figsize=(8, 8), sharex=True)
     for i, lbl in enumerate(("e_x", "e_y", "e_z")):
         ax[i].plot(t, e[:, i], "r")
         ax[i].set_ylabel(rf"${lbl}$ [m]")
@@ -688,6 +728,52 @@ def visualization_p2p(dynamic_model, sol, r_OP_ref_fn):
 
     plt.show()
 
+def falling_vis_plot(dynamic_model, sol):
+
+    rod_visualization(dynamic_model, sol)
+    rod = dynamic_model.rod
+    from matplotlib import pyplot as plt
+
+    t = sol.t
+    q = sol.q[:, rod.qDOF].reshape((-1, rod.nnode, 7))
+    r_OP = q[:,-1, 0:3]
+
+    # ---- Point to Point plots ----
+    fig = plt.figure(figsize=(8,6))
+    gs = fig.add_gridspec(3, 1)
+
+    atx = fig.add_subplot(gs[0, 0])
+    atx.plot(t, q[:, -1, 0], "r")
+    # atx.plot(t2, q2[:, -1, 0], "--b", label="ScipyDAE")
+    atx.set_xlabel("Time [s]")
+    atx.set_ylabel("X [m]")
+    # atx.legend()
+    atx.grid(True)
+
+    aty = fig.add_subplot(gs[1, 0])
+    aty.plot(t, q[:, -1, 1], "r")
+    # aty.plot(t2, q2[:, -1, 1], "--b", label="ScipyDAE")
+    aty.set_xlabel("Time [s]")
+    aty.set_ylabel("Y [m]")
+    # aty.legend()
+    aty.grid(True)
+
+    atz = fig.add_subplot(gs[2, 0])
+    atz.plot(t, q[:, -1, 2], "r")
+    # atz.plot(t2, q2[:, -1, 2], "--b", label="ScipyDAE")
+    atz.set_xlabel("Time [s]")
+    atz.set_ylabel("Z [m]")
+    # atz.legend()
+    atz.grid(True)
+
+
+    fig.suptitle(f"Falling Test")
+    fig.tight_layout()
+
+    plt.show()
+
+def solver_error_plot(sol1, sol2):
+    return
 # ----- controller parameters -----
 la_t_min = 0.0
 la_t_max = 50.0
@@ -702,7 +788,6 @@ la_t_max = 50.0
 def paper_to_cardillo(u):
     X, Y, Z = u
     return np.array([Y, Z, X])
-
 
 # def make_circle(x_fn, y_fn, z_fn, t_period):
 #     def ref(t):

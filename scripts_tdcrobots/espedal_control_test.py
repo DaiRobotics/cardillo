@@ -265,15 +265,11 @@ def setpoint_trajectory_ts():
 # ---- visualization ----
     visualization_p2p(dynamic_model, sol, r_OP_ref_fn)
 
-## Interpolation in Actuator Space
-def setpoint_trajectory_as():
-    # t_sim = 50 # Comment out if using hold_schedule
 
-    la_t_A = np.array([0.73792114, 3.17753766, 0.0, 0.0])
-    la_t_B = np.array([2.28280023, 3.48103006, 3.38276666, 1.28709287])
-    la_t_C = np.array([3.02999893, 2.79040527, 0.469079, 1.96589514])
-    la_t_D = np.array([2.01397515, 3.03451165, 3.10051456, 2.36642629])
-    la_t_E = np.array([1.9244945,  1.78542759, 1.9244945,  2.05885467])
+
+## Interpolation in Actuator Space
+def setpoint_trajectory_as(t_move, t_hold, Kp=0.0, Kd=0.0, damping_ratio=0.0):
+    # t_sim = 50 # Comment out if using hold_schedule
 
     la_t_ref0 = np.concatenate((la_t_A[None, :], la_t_B[None, :], la_t_C[None, :], la_t_D[None, :], la_t_E[None, :]))
     ## -------- Reference Forces la_t --------
@@ -284,8 +280,10 @@ def setpoint_trajectory_as():
     
     
     # Hold Schedule
-    t_move = 0.5    
-    t_hold = 9.5
+    # t_move = 0.5    
+    # t_hold = 9.5
+    # t_move = 2
+    # t_hold = 1
     la_t_ref_hold, ts2 = add_segment_holds(la_t_ref, segment_length=1, t_move=t_move, t_hold=t_hold)
     t_sim = ts2[-1]
 
@@ -305,7 +303,7 @@ def setpoint_trajectory_as():
 
 
     ## ------- Reference Trajectory r_OP_ref --------
-    print("calc E to A")
+    print("calc setpoint path from E to E")
     # TODO interpolate the force manually, and set ret_all_steps=False
     force_steps = 50 # Normally 50 force steps
     sol, x, solver = static_model.apply_forces(
@@ -329,17 +327,47 @@ def setpoint_trajectory_as():
 
     ## -------- Dynamic Solve --------
     print("dynamic control:")
-    Kp = 0.5
-    Kd = 0.0
-    dynamic_model = DynamicModel(
-        t_sim, Kp, Kd, Gamma0, la_t_fb0, r_OP_ref_fn, la_t_ref_fn, q0, damping_ratio=0.3
+    # Kp = 0.5
+    # Kd = 0.0
+    dynamic_model = DynamicModel(t_sim, Kp, Kd, Gamma0, la_t_fb0, r_OP_ref_fn, la_t_ref_fn, q0, damping_ratio=damping_ratio)
+    return dynamic_model, t_sim, r_OP_ref_fn
+    # sol = dynamic_model.solver.solve()
+    # solver = ScipyDAE(dynamic_model.system, t_sim, dt=1e-2)
+    # sol = solver.solve()
+    # print(Kp, Kd)
+    # visualization_p2p(dynamic_model, sol, r_OP_ref_fn)
+
+def e2a_as(t_move, t_hold, Kp=0.0, Kd=0.0, damping_ratio=0.0):
+    la_t_ref0 = la_t_A[None, :]
+    la_t_ref = np.concatenate([la_t_E[None, :], la_t_ref0])
+    la_t_ref_hold, ts2 = add_segment_holds(la_t_ref, segment_length=1, t_move=t_move, t_hold=t_hold)
+    t_sim = ts2[-1]
+
+    def la_t_ref_fn(t):
+        return np.array([interp1d_poly(ts2, la_t_ref_hold[:, i], t) for i in range(4)])
+
+    la_t_fb0 = la_t_E
+
+    static_model = StaticModel()
+    print("calc E")
+    Gamma0, r_OP_E, q0 = eval_gamma(static_model, la_t_E)
+
+    # ----- Reference Tip Path E to A -----
+    force_steps = 50 # Normally 50 force steps
+    sol, x, solver = static_model.apply_forces(
+        la_t_ref0, force_steps=force_steps, ret_all_steps=True, verbose=True
     )
-    sol = dynamic_model.solver.solve()
-    print(Kp, Kd)
+    r_OP_ref = sol.q[:, -7:-4]
+    r_OP_ref = np.concatenate((r_OP_E[None, :], r_OP_ref))
+    r_OP_ref_hold, ts = add_segment_holds(r_OP_ref, segment_length=force_steps, t_move=t_move, t_hold=t_hold)
 
-    visualization_p2p(dynamic_model, sol, r_OP_ref_fn)
+    def r_OP_ref_fn(t):
+        return np.array([interp1d(ts, r_OP_ref_hold[:, i], t) for i in range(3)])
+    
+    dynamic_model = DynamicModel(t_sim, Kp, Kd, Gamma0, la_t_fb0, r_OP_ref_fn, la_t_ref_fn, q0, damping_ratio=damping_ratio)
+    return dynamic_model, t_sim, r_OP_ref_fn
 
-def falling_test():
+def falling_test(damping_ratio=0.0):
     t_sim = 10
 
     # full-row-rank placeholder so the controller can form Gamma_inv;
@@ -355,20 +383,36 @@ def falling_test():
     dynamic_model = DynamicModel(
         t_sim, Kp, Kd, Gamma0, la_t0, r_OP_ref_fn, la_t_ref_fn,
         q0=None,                # <-- start from the straight initial configuration
-        damping_ratio=0.0,
+        damping_ratio=damping_ratio,
     )
-    sol = dynamic_model.solver.solve()
-    visualization_p2p(dynamic_model, sol, r_OP_ref_fn)
+    return dynamic_model, t_sim
+    # sol = dynamic_model.solver.solve()
+    # visualization_p2p(dynamic_model, sol, r_OP_ref_fn)
+
+def traj_test(test_nr, t_move, t_hold, Kp=0, Kd=0, damping_ratio=0):
+    " 1 for full setpoint table trajectory"
+    " 2 for trajectory from point E to A"
+    " Anything else for a falling test"
+
+    if test_nr == 1:
+        dynamic_model, t_sim, r_OP_ref_fn = setpoint_trajectory_as(t_move, t_hold, Kp=Kp, Kd=Kd, damping_ratio=damping_ratio)
+    elif test_nr == 2:
+        dynamic_model, t_sim, r_OP_ref_fn = e2a_as(t_move, t_hold, Kp=Kp, Kd=Kd, damping_ratio=damping_ratio)
+    else:
+        dynamic_model, t_sim = falling_test()
+        def r_OP_ref_fn(t): return np.zeros(3)
+
+    return dynamic_model, t_sim, r_OP_ref_fn
 
 if __name__ == "__main__":
     # create_zy_circle_csv(N=50)
     # zy_circle_trajectory()
 
     ## Interpolation in Actuator Space
-    setpoint_trajectory_as()
+    # setpoint_trajectory_as()
 
     ## Interpolation in Task Space
     # setpoint_table_csv()
     # setpoint_trajectory_ts()
 
-    # falling_test()
+    falling_test()
