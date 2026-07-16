@@ -26,12 +26,12 @@ if __name__ == "__main__":
 
     dynamic_model, t_sim, r_OP_ref_fn = traj_test(1, t_move, t_hold)
 
-    rod = dynamic_model.rod
-    fixed_qDOF = rod.qDOF[rod.nodalDOF[0]]
-    fixed_uDOF = rod.uDOF[rod.nodalDOF_u[0]]
-    solver = RungeKutta(dynamic_model.system, t_sim, dt, fixed_qDOF=fixed_qDOF, fixed_uDOF=fixed_uDOF)
+    # rod = dynamic_model.rod
+    # fixed_qDOF = rod.qDOF[rod.nodalDOF[0]]
+    # fixed_uDOF = rod.uDOF[rod.nodalDOF_u[0]]
+    # solver = RungeKutta(dynamic_model.system, t_sim, dt, fixed_qDOF=fixed_qDOF, fixed_uDOF=fixed_uDOF)
 
-    # solver = ScipyDAE(dynamic_model.system, t_sim, dt)
+    solver = ScipyDAE(dynamic_model.system, t_sim, dt)
     
     # solver = BackwardEuler(dynamic_model.system, t_sim, dt)
     

@@ -195,7 +195,7 @@ class TendonForceControl:
     
     def step_callback(self, t, q, u):
     # Gamma check every accepted time step
-        return q, u
+        # return q, u
         if (
             self.static_model is not None
             and t - self.last_gamma_check_t >= self.gamma_check_dt
@@ -219,17 +219,17 @@ class TendonForceControl:
         # self.apply_tendon_forces(t, q)
         return q, u
     
-    def q_dot_q(self, t, q, u):
-        J = np.zeros((self._nq1, len(self.qDOF)))
-        tip_r = self._nq1 + np.arange(7*(self.rod.nnode-1), 7*(self.rod.nnode-1)+3)
-        J[:, tip_r] = -self.Kp * self.Gamma_inv
-        return J
+    # def q_dot_q(self, t, q, u):
+    #     J = np.zeros((self._nq1, len(self.qDOF)))
+    #     tip_r = self._nq1 + np.arange(7*(self.rod.nnode-1), 7*(self.rod.nnode-1)+3)
+    #     J[:, tip_r] = -self.Kp * self.Gamma_inv
+    #     return J
 
-    def q_dot_u(self, t, q):
-        J = np.zeros((self._nq1, len(self.uDOF)))
-        tip_v = np.arange(6*(self.rod.nnode-1), 6*(self.rod.nnode-1)+3)
-        J[:, tip_v] = -self.Kd * self.Gamma_inv
-        return J
+    # def q_dot_u(self, t, q):
+    #     J = np.zeros((self._nq1, len(self.uDOF)))
+    #     tip_v = np.arange(6*(self.rod.nnode-1), 6*(self.rod.nnode-1)+3)
+    #     J[:, tip_v] = -self.Kd * self.Gamma_inv
+    #     return J
         
     ## OLD CODE
     # def step_callback(self, t, q, u):
