@@ -46,7 +46,7 @@ if __name__ == "__main__":
     cos_test()
 
 
-## Runge-Kutta Solver
+## Runge-Kutta Explicit Solver
 class RungeKutta:
     def __init__(
             self,
@@ -190,3 +190,28 @@ class RungeKutta:
             u=np.array(u),
             solver_summary=solver_summary,
         )
+    
+# class RungeKuttaAdaptive():
+#     init()
+    
+class ProbeRK(RungeKutta):
+    """Identical dynamics to RungeKutta (delayed step_callback control), but at
+    every RK stage records how far the frozen applied tension is from what the
+    control law would command for the current stage state."""
+
+    def __init__(self, system, ctrl, t1, dt, **kwargs):
+        super().__init__(system, t1, dt, **kwargs)
+        self.ctrl = ctrl
+        self.probe_t = []
+        self.la_t_mismatch = []
+        self.la_t_applied = []
+
+    def dxdt(self, t, x_red):
+        q, u = self.get_full_state(x_red)
+        ctrl = self.ctrl
+        la_fresh = ctrl.control_law(t, q[ctrl.qDOF], u[ctrl.uDOF])
+        la_applied = np.array([td.la(t) for td in ctrl.tendons])
+        self.probe_t.append(t)
+        self.la_t_mismatch.append(np.linalg.norm(la_fresh - la_applied))
+        self.la_t_applied.append(np.linalg.norm(la_applied))
+        return super().dxdt(t, x_red)

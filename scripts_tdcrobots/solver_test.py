@@ -37,4 +37,5 @@ if __name__ == "__main__":
     
     sol = solver.solve()
     p2p_vis_plot(dynamic_model, sol, r_OP_ref_fn)
+    plt.show()
     # falling_vis_plot(dynamic_model,sol)

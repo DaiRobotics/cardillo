@@ -670,6 +670,7 @@ def rod_visualization(dynamic_model, sol):
 def p2p_vis_plot(dynamic_model, sol, r_OP_ref_fn):
     rod_visualization(dynamic_model, sol)
     rod = dynamic_model.rod
+    ntendons = dynamic_model.n_tendons
     from matplotlib import pyplot as plt
 
     t = sol.t
@@ -678,6 +679,8 @@ def p2p_vis_plot(dynamic_model, sol, r_OP_ref_fn):
     r_OP = q[:,-1, 0:3]
     e = r_OP_ref - r_OP
     e_n = np.array([np.linalg.norm(e[i]) for i in range(len(e))])
+
+    la_t = sol.q[:, -ntendons:]
 
    # ---- Point to Point plots ----
     fig = plt.figure("XYZ", figsize=(8,6))
@@ -726,7 +729,16 @@ def p2p_vis_plot(dynamic_model, sol, r_OP_ref_fn):
     fig2.suptitle("Tracking Error per Direction (E to A)")
     fig2.tight_layout()
 
-    plt.show()
+    # fig = plt.figure("la_t", figsize=(8,6))
+    # gs = fig.add_gridspec(1, 1)
+
+    # atla_t = fig.add_subplot(gs[0, 0])
+    # atla_t.plot(t, la_t[:,0], "r", label="1")
+    # atla_t.plot(t, la_t[:,1], "b", label="2")
+    # atla_t.plot(t, la_t[:,2], "g", label="3")
+    # atla_t.legend()
+    # atla_t.grid(True)    
+
 
 def falling_vis_plot(dynamic_model, sol):
 
@@ -772,8 +784,23 @@ def falling_vis_plot(dynamic_model, sol):
 
     plt.show()
 
-def solver_error_plot(sol1, sol2):
-    return
+def solver_error_plot(r_OP_ref_fn, dynamic_model1, sol1, dynamic_model2, sol2):
+    r_OP_ref = np.array([r_OP_ref_fn(ti) for ti in t])
+
+    rod1 = dynamic_model1.rod
+    t1 = sol1.t
+    q1 = sol1.q[:, rod1.qDOF].reshape((-1, rod1.nnode, 7))
+    r_OP1 = q1[:,-1, 0:3]
+    e1 = r_OP_ref - r_OP1
+    e_n1 = np.array([np.linalg.norm(e[i]) for i in range(len(e))])
+
+    rod2 = dynamic_model2.rod
+    t2 = sol2.t
+    q2 = sol2.q[:, rod2.qDOF].reshape((-1, rod2.nnode, 7))
+    r_OP2 = q2[:,-1, 0:3]
+    e2 = r_OP_ref - r_OP2
+    e_n2 = np.array([np.linalg.norm(e[i]) for i in range(len(e))])
+    plt.show()
 # ----- controller parameters -----
 la_t_min = 0.0
 la_t_max = 50.0
