@@ -25,7 +25,7 @@ from scipy.sparse.linalg import splu
 
 from espedal_control_test import p2p_vis_plot
 from runge_kutta import *
-from dynamic_controller import DynamicControllerNew
+from dynamic_controller import DynamicControllerPD
 
 # G_ACCEL = -1
 G_ACCEL = 9.81
@@ -105,8 +105,8 @@ class CommonModel(ABC):
         rc = RigidConnection(self.rod, self.system.origin, xi1=0)
 
         # ---- tendons ----
-        # self.n_tendons = 4
-        self.n_tendons = 3
+        self.n_tendons = 4
+        # self.n_tendons = 3
         self.tendons = []
         B_r_CP_lists = [
             [
@@ -162,30 +162,40 @@ def compute_la_ts(controller, sol):
     return la_ts
 
 if __name__ == "__main__":
-    damping_ratio = 0.3
+    damping_ratio = 0.1
     model = CommonModel(damping_ratio=damping_ratio) # dt = 1e-4 for damping_ratio = 1e-3
     system = model.system
     rod = model.rod
     tendons = model.tendons
     
     # Parameters
-    Kp = 0.0
-    Kd = 0.0
+    Kp = 400.0
+    Kd = 40.0
     inv_damping = 1e-3
 
     # Trajectories
     # r_OP_ref_fn = lambda t: np.array([0.0, 0.0, 0.192])
-    r_OP_ref_fn = lambda t: SETPOINT_TABLE["A"]
+    # r_OP_ref_fn = lambda t: SETPOINT_TABLE["A"]
+    
+    # P2P Setpoints Trajectory
+    def make_sequence_ref(names, t_hold=5.0):
+        pts = [SETPOINT_TABLE[n] for n in names]
+        def r_OP_ref_fn(t):
+            idx = min(int(t // t_hold), len(pts) - 1)
+            return pts[idx]
+        return r_OP_ref_fn
+
+    r_OP_ref_fn = make_sequence_ref(["A", "B", "C", "D", "E"], t_hold=5.0)
     v_P_ref_fn = lambda t: np.zeros(3)
     
 
-    controller = DynamicControllerNew(system, rod, tendons, r_OP_ref_fn, v_P_ref_fn, Kp=Kp, Kd=Kd)
+    controller = DynamicControllerPD(system, rod, tendons, r_OP_ref_fn, v_P_ref_fn, Kp=Kp, Kd=Kd, inv_damping=inv_damping)
     system.add(controller)
     system.assemble()
 
     # Solver
-    # t_sim = 0.5
-    t_sim = 1.0
+    t_sim = 25
+    # t_sim = 1.0
     # t_sim = 0.5
     dt = 1e-4
     # solver = BackwardEuler(system, t_sim, dt)
@@ -202,7 +212,7 @@ if __name__ == "__main__":
     print(f"Kp = {Kp}, Kd = {Kd}, damping ratio = {damping_ratio}, t_sim = {t_sim}, dt = {dt}")
 
     p2p_vis_plot(model, sol, r_OP_ref_fn)
-    # plt.show()
+    plt.show()
     la_ts = compute_la_ts(controller, sol)
     la_t_plot(model, la_ts, sol)
     # probe_plot(solver)

@@ -263,7 +263,8 @@ def setpoint_trajectory_ts():
     print(Kp, Kd)
 
 # ---- visualization ----
-    visualization_p2p(dynamic_model, sol, r_OP_ref_fn)
+    # visualization_p2p(dynamic_model, sol, r_OP_ref_fn)
+    p2p_vis_plot(dynamic_model, sol, r_OP_ref_fn)
 
 
 
