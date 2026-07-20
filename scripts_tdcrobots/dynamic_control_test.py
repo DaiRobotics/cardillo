@@ -25,11 +25,12 @@ from scipy.sparse.linalg import splu
 
 from espedal_control_test import p2p_vis_plot
 from runge_kutta import *
-
+from dynamic_controller import DynamicControllerNew
 
 # G_ACCEL = -1
-# G_ACCEL = 9.81
-G_ACCEL = 0 # Test
+G_ACCEL = 9.81
+# G_ACCEL = 7
+# G_ACCEL = 0 # Test
 
 SETPOINT_TABLE = {
     "A": np.array([15.438e-2, 4.335e-2, 3.399e-2]),
@@ -142,152 +143,9 @@ class CommonModel(ABC):
         )
         self.system.add(self.gravity)
 
-class DynamicController():
-    def __init__(
-        self,
-        system,
-        r_OP_ref,
-        v_P_ref,
-        Kp,
-        Kd,
-        inv_damping,
-        rod,
-        tendons: list[RodTendonForce],
-        name="tendon_force_control",
-    ) -> None:
-        self.system = system
-        self.r_OP_ref = r_OP_ref
-        self.v_P_ref = v_P_ref
-        self.Kp = Kp
-        self.Kd = Kd
-        self.inv_damping = inv_damping
-        self.rod = rod
-        self.tendons = tendons
-        self.name = name
-        
-        self.M_inv2 = None
-        self.nq = len(tendons)
-        self.q0 = np.zeros(self.nq)
-        self._la_t_dot = np.zeros(self.nq)
-        self._la_t = np.zeros(self.nq)
-        self._la_t_des = np.zeros(self.nq)
-
-        self.la_ts = []
-        self.ts = []
-
-        self.nla_tau = len(tendons)
-
-    def assembler_callback(self):
-        self.qDOF = np.concatenate([self.my_qDOF, self.rod.qDOF])
-        self._nq1 = len(self.my_qDOF)
-        self.uDOF = self.rod.uDOF
-        # self.uDOF_free = np.setdiff1d(self.uDOF, self.uDOF[self.rod.nodalDOF_u[0]]) # Dont work with free DOFs in Controller, instead in solver!
-        self.C_1 = np.zeros((3,self.rod.nq))
-        self.C_1[:, self.rod.nodalDOF_r[-1]] = np.eye(3) 
-
-    def build_W_tau(self, t, q_sys):
-        W_tau = np.zeros((len(self.uDOF), self.nla_tau))
-        for j, td in enumerate(self.tendons):
-            np.add.at(W_tau[:, j], td.uDOF - self.uDOF[0], -td.W_l(t, q_sys[td.qDOF]))
-            # W_t[td.uDOF, j] = -td.W_l(t, q_sys[td.qDOF])
-        return W_tau
-
-    def control_law(self, t, q, u):
-        sys = self.system
-
-        q_sys = np.zeros(sys.nq)
-        q_sys[self.qDOF] = q
-        u_sys = np.zeros(sys.nu)
-        u_sys[self.uDOF] = u
-
-        # Build M_inv2
-        if self.M_inv2 is None:
-            rod = self.rod
-            q_rod = q_sys[rod.qDOF]
-            B = rod.q_dot_u(t, q_rod).toarray()
-            C_2 = self.C_1 @ B
-            M = rod.M(t, q_rod).toarray()
-            # M_free = sys.M(t, q_sys)[self.uDOF_free][:, self.uDOF_free]
-            # self.M_inv2 = splu(M).solve(C_2.T).T
-            self.M_inv2 = C_2 @ np.linalg.inv(M)
-            # self.M_inv2 = .solve(C_2.T).T
-
-        # Build tendon force directions W_tau
-        cache = getattr(self, "W_tau_cache", None)
-        if cache is not None and cache[0] == t and np.array_equal(cache[1], q):
-            W_tau = cache[2]
-        else:
-            W_tau = self.build_W_tau(t, q_sys)
-            
-        # Current tendon force
-        # la_t = q[: self._nq1]
-
-        # Build h consisting of gyroscopic and external forces from system and add compliance forces
-        # h = sys.h(t, q_sys, u_sys) + sys.W_c(t, q_sys) @ sys.la_c(t, q_sys, u_sys) - W_t @ la_t
-        # h = sys.h(t, q_sys, u_sys) + sys.W_c(t, q_sys) @ sys.la_c(t, q_sys, u_sys) - W_t @ self._la_t
-        h =  sys.h(t, q_sys, u_sys) + sys.W_c(t, q_sys) @ sys.la_c(t, q_sys, u_sys)
-        # h = sys.h(t, q_sys, u_sys) + sys.W_c(t, q_sys) @ sys.la_c(t, q_sys, u_sys) - W_t @ q[:self._nq1] ## New test
-        # h = sys.h(t, q_sys, u_sys) - W_t @ q[:self._nq1]
-
-        # Build y_0_ddot and Jacobian
-        y_0_ddot = - self.M_inv2 @ h
-        J = self.M_inv2 @ W_tau
-        J_inv = np.linalg.inv(J) # Pure inverse (Causes singularities, add damped inverse)
-        # J_inv = J.T @ np.linalg.solve(J @ J.T + self.inv_damping * np.eye(3), np.eye(3)) # Moore Penrose Pseudo Inverse
-
-        # Error terms
-        r_OP_ref = self.r_OP_ref(t)
-        v_P_ref = self.v_P_ref(t)
-        a_P_ref = np.zeros(3) # CHECK
-
-        r_OP = self.rod._view_nodal_q(q[self._nq1 :])[-1, :3]
-        # print(r_OP)
-        # if not np.isfinite(r_OP).all():      # True if any NaN or inf
-        #     print(f"non-finite r_OP at t={t}: {r_OP}")
-        #     breakpoint()
-        v_P = self.rod._view_nodal_u(u)[-1, :3]
-        
-        e = r_OP_ref - r_OP
-        e_dot = v_P_ref - v_P
-
-        a = a_P_ref + self.Kd * e_dot + self.Kp * e       # linear PD Control law
-        # a *= 0
-        # a = a_P_ref + beta * e_dot + gamma * np.sign(e_dot + beta * e)  # Switching mode control law
-
-        # Input-Output Feedback Linearization
-        la_t = J_inv @ (a + y_0_ddot)
-        # if not np.isfinite(la_t).all():      # True if any NaN or inf
-            # print(f"non-finite la_t at t={t}: {la_t}")
-            # breakpoint()
-        # la_t *= 0
-        return la_t
-    
-    def q_dot(self, t, q, u):
-        return self._la_t_dot
-    
-    def step_callback(self, t, q, u):
-        # la_t = self.control_law(t, q, u)
-        # # self._la_t = la_t
-        # self.la_ts.append(np.array(la_t))
-        # self.ts.append(t)
-        # for td, la_t_i in zip(self.tendons, la_t):
-        #     td.set_force(lambda t, la=la_t_i: la)
-        return q, u
-
-    def la_tau(self, t, q, u):
-        return self.control_law(t, q, u)
-
-    def W_tau(self, t, q):
-        q_sys = np.zeros(self.system.nq)
-        q_sys[self.qDOF] = q
-        self.W_tau_cache = (t, q.copy(), self.build_W_tau(t, q_sys))
-        return self.W_tau_cache[2][self.uDOF]
-
-
-def la_t_plot(controller, model):
+def la_t_plot(model, la_ts, sol):
     import matplotlib.pyplot as plt
-    ts = np.array(controller.ts)
-    la_ts = np.array(controller.la_ts)      # shape (n_steps, n_tendons)
+    ts = sol.t
 
     fig, ax = plt.subplots(num="TendonForces", figsize=(8, 4))
     for k in range(model.n_tendons):
@@ -296,44 +154,22 @@ def la_t_plot(controller, model):
     ax.set_title("Tendon Forces"); ax.legend(); ax.grid(True)
     plt.show()
 
-# def compute_la_ts(controller, sol):
-#     la_ts = np.array([
-#         controller.control_law(t, q[controller.qDOF], u[controller.uDOF])
-#         for t, q, u in zip(sol.t, sol.q, sol.u)
-#     ])
-#     return sol.t, la_ts
-
-def probe_plot(solver):
-        import matplotlib.pyplot as plt
-        t = np.asarray(solver.probe_t)
-        mism = np.asarray(solver.la_t_mismatch)
-        appl = np.asarray(solver.la_t_applied)
-        ok = np.isfinite(mism) & np.isfinite(appl)
-
-        fig, ax = plt.subplots(num="StalenessProbe", figsize=(8, 4))
-        ax.semilogy(t[ok], np.maximum(mism[ok], 1e-16), ".", ms=2,
-                    label=r"$\|\lambda_{fresh} - \lambda_{applied}\|$ (staleness)")
-        ax.semilogy(t[ok], np.maximum(appl[ok], 1e-16), ".", ms=2,
-                    label=r"$\|\lambda_{applied}\|$")
-        ax.set_xlabel("Time [s]")
-        ax.set_ylabel("Tendon force [N]")
-        ax.set_title("Staleness of applied tendon force")
-        ax.legend()
-        ax.grid(True, which="both", alpha=0.3)
-        plt.show()
+def compute_la_ts(controller, sol):
+    la_ts = np.array([
+        controller.la_tau(t, q[controller.qDOF], u[controller.uDOF])
+        for t, q, u in zip(sol.t, sol.q, sol.u)
+    ])
+    return la_ts
 
 if __name__ == "__main__":
-    damping_ratio = 0.0
-    # model = CommonModel(damping_ratio=0.3) 
+    damping_ratio = 0.3
     model = CommonModel(damping_ratio=damping_ratio) # dt = 1e-4 for damping_ratio = 1e-3
     system = model.system
     rod = model.rod
     tendons = model.tendons
     
     # Parameters
-    # Kp = 100
-    # Kd = 20
-    Kp = 10.0
+    Kp = 0.0
     Kd = 0.0
     inv_damping = 1e-3
 
@@ -343,26 +179,30 @@ if __name__ == "__main__":
     v_P_ref_fn = lambda t: np.zeros(3)
     
 
-    controller = DynamicController(system, r_OP_ref_fn, v_P_ref_fn, Kp, Kd, inv_damping, rod, tendons)
+    controller = DynamicControllerNew(system, rod, tendons, r_OP_ref_fn, v_P_ref_fn, Kp=Kp, Kd=Kd)
     system.add(controller)
     system.assemble()
 
     # Solver
-    t_sim = 0.5
-    # t_sim = 0.005
+    # t_sim = 0.5
+    t_sim = 1.0
     # t_sim = 0.5
     dt = 1e-4
     # solver = BackwardEuler(system, t_sim, dt)
-    # solver = ScipyDAE(system, t_sim, dt)
+    solver = ScipyDAE(system, t_sim, dt)
 
     fixed_qDOF = rod.qDOF[rod.nodalDOF[0]]
     fixed_uDOF = rod.uDOF[rod.nodalDOF_u[0]]
-    solver = RungeKutta(system, t_sim, dt, fixed_qDOF=fixed_qDOF, fixed_uDOF=fixed_uDOF)
+    # solver = RungeKutta(system, t_sim, dt, fixed_qDOF=fixed_qDOF, fixed_uDOF=fixed_uDOF) # Doesn't work when damping is added
+
+    # Test to see the solution exploding due to la_tau not being updated properly
     # solver = ProbeRK(system, controller, t_sim, dt, fixed_qDOF=fixed_qDOF, fixed_uDOF=fixed_uDOF)
     
     sol = solver.solve()
     print(f"Kp = {Kp}, Kd = {Kd}, damping ratio = {damping_ratio}, t_sim = {t_sim}, dt = {dt}")
 
     p2p_vis_plot(model, sol, r_OP_ref_fn)
-    la_t_plot(controller, model)
+    # plt.show()
+    la_ts = compute_la_ts(controller, sol)
+    la_t_plot(model, la_ts, sol)
     # probe_plot(solver)
