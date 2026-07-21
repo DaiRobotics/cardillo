@@ -132,6 +132,7 @@ def pinv_solve(A, b, rcond=1e-14, *args):
 def fsolve(
     fun,
     x0,
+    f0=None,
     jac=None,
     fun_args=(),
     jac_args=(),
@@ -233,7 +234,7 @@ def fsolve(
     tol_rel = options.newton_rtol
 
     # initial function value
-    f = np.atleast_1d(fun(x0))
+    f = np.atleast_1d(f0 if f0 is not None else fun(x0))
 
     # error of initial guess
     error = error0 = norm(f) / f.size**0.5

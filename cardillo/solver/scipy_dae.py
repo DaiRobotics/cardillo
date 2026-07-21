@@ -189,6 +189,7 @@ class ScipyDAE:
         F["Mu", s1:s2] = M.tocsr(fix_size=True) @ u_dot
         F["h", s1:s2, True] = h
         if sys.nla_tau:
+            W_tau.manual_sync()
             F["Wla_tau", s1:s2, True] = W_tau.tocsr(fix_size=True) @ self.system.la_tau(
                 t, q, u
             )
@@ -316,7 +317,7 @@ class ScipyDAE:
 
         if sys.nla_g:
             Jy["Wla_g_q", s0:s1, :s0, True] = Wla_g_q
-            # TODO: remove this
+            # TODO: remove manual_sync, currently not possible due to g_q.T
             g_q.manual_sync()
             Jy["g_q", s1:s2, :s0] = g_q
             Jy["g_dot_q", s2:s3, :s0] = g_dot_q

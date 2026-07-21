@@ -28,7 +28,7 @@ setup(
         "dill>=0.3.7",
         "cachetools>=5.3.3",
         "trimesh>=4.0.5",
-        "vtk>=9.3.0",
+        "vtk>=9.6.2",
         "solve_dae>=0.2.3",
         "urdf_parser_py",
         "jax",

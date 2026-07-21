@@ -62,10 +62,12 @@ class Newton:
         self.x[0] = x0
         self._W_g_coo = CooMatrix((system.nu, system.nla_g), manual_sync=True)
         self._W_c_coo = CooMatrix((system.nu, system.nla_c), manual_sync=True)
+        self._W_tau_coo = CooMatrix((system.nu, system.nla_tau), manual_sync=True)
         self._W_N_coo = CooMatrix((system.nu, system.nla_N), manual_sync=True)
         self._h_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
         self._Wla_g_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
         self._Wla_c_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self._Wla_tau_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
         self._c_q_coo = CooMatrix((system.nla_c, system.nq), manual_sync=True)
         self._g_q_coo = CooMatrix((system.nla_g, system.nq), manual_sync=True)
         self._g_S_q_coo = CooMatrix((system.nla_S, system.nq), manual_sync=True)
@@ -89,6 +91,9 @@ class Newton:
         # https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_array.html#scipy.sparse.csr_array
         W_g = self._W_g_coo = self.system.W_g(t, q, format="Coo", coo=self._W_g_coo)
         W_c = self._W_c_coo = self.system.W_c(t, q, format="Coo", coo=self._W_c_coo)
+        W_tau = self._W_tau_coo = self.system.W_tau(
+            t, q, format="Coo", coo=self._W_tau_coo
+        )
 
         c = self._c_coo = self.system.c(
             t, q, self.u0, la_c, format="Coo", coo=self._c_coo
@@ -104,7 +109,11 @@ class Newton:
         F["Wla_g", :r0] = W_g.tocsr(fix_size=True) @ la_g
 
         W_c.manual_sync()
+        la_tau = self.system.la_tau(t, q, self.u0)
         F["Wla_c", :r0] = W_c.tocsr(fix_size=True) @ la_c
+
+        W_tau.manual_sync()
+        F["Wla_tau", :r0] = W_tau.tocsr(fix_size=True) @ la_tau
 
         if self.nla_N:
             W_N = self._W_N_coo = self.system.W_N(t, q, format="Coo", coo=self._W_N_coo)
@@ -142,6 +151,9 @@ class Newton:
         Wla_c_q = self._Wla_c_q_coo = self.system.Wla_c_q(
             t, q, la_c, format="Coo", coo=self._Wla_c_q_coo
         )
+        Wla_tau_q = self._Wla_tau_q_coo = self.system.Wla_tau_q(
+            t, q, self.u0, format="Coo", coo=self._Wla_tau_q_coo
+        )
         g_q = self._g_q_coo = self.system.g_q(t, q, format="Coo", coo=self._g_q_coo)
         g_S_q = self._g_S_q_coo = self.system.g_S_q(
             t, q, format="Coo", coo=self._g_S_q_coo
@@ -160,6 +172,7 @@ class Newton:
         jac["g_q", r0:r1, :c0] = g_q
         jac["Wla_g_q", :r0, :c0] = Wla_g_q
         jac["Wla_c_q", :r0, :c0] = Wla_c_q
+        jac["Wla_tau_q", :r0, :c0] = Wla_tau_q
         jac["h_q", :r0, :c0] = h_q
         jac["c_q", r1:r2, :c0] = c_q
 

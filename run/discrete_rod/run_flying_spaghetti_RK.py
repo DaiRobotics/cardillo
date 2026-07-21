@@ -17,7 +17,7 @@ from cardillo_example_systems.flying_spaghetti import gen_flying_spaghetti, x_re
 ##############
 # Setup system
 ##############
-tsim = 7.0
+tend = 7.0
 dt = 1e-2
 nelement = 10
 ret = gen_flying_spaghetti(nelement=nelement)
@@ -28,7 +28,7 @@ t0 = system.t0
 #################
 # ScipyDAE solver
 #################
-solver = ScipyDAE(system, tsim, dt, rtol=1e-3, atol=1e-6)
+solver = ScipyDAE(system, tend, dt, rtol=1e-3, atol=1e-6)
 solver.fun(system.t0, solver.y0, solver.y0)
 solver.jac(system.t0, solver.y0, solver.y0)
 t1 = perf_counter()
@@ -70,7 +70,7 @@ dydt(t0, y0)
 
 t1 = perf_counter()
 # t, y =runge_kutta_4(dydt, y0, 0, tsim, dt, step_callback=step_callback)
-t, y = runge_kutta_3_8(dydt, y0, 0, tsim, dt, step_callback=step_callback)
+t, y = runge_kutta_3_8(dydt, y0, 0, tend, dt, step_callback=step_callback)
 
 # sol_ivp = solve_ivp(dydt, (0, tsim), y0, method='RK45', t_eval=np.arange(0, tsim, dt))
 # t, y = sol_ivp.t, sol_ivp.y.T

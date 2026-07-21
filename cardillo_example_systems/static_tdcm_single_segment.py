@@ -15,9 +15,6 @@ from cardillo.rods import (
 
 
 def gen_single_segment_tdcm(live_plotter=False):
-    ##################
-    ## build system ##
-    ##################
     # ---- parameters ----
     rod_nelement = 10  # number of elements for the rod discretization
     rod_m = 0.433  # [kg] mass of the rod
@@ -105,7 +102,9 @@ def gen_single_segment_tdcm(live_plotter=False):
     B_r_CP_lists = [
         [
             rod_A_IB0.T
-            @ np.array([tendon_hole_r * np.cos(phi), tendon_hole_r * np.sin(phi), 0]),
+            @ np.array(
+                [tendon_hole_r * np.cos(phi), tendon_hole_r * np.sin(phi), -connector_h]
+            ),
             rod_A_IB0.T
             @ np.array(
                 [
@@ -125,7 +124,7 @@ def gen_single_segment_tdcm(live_plotter=False):
             B_r_CPs=B_r_CP_list,
         )
         tendons.append(tendon)
-    tendons[0].la = lambda t: t * 50
+    tendons[0].la_tau = lambda t, q, u: t * 50
     system.add(*tendons)
     # ---- add to system ----
     system.add(rod)
@@ -139,10 +138,8 @@ def gen_single_segment_tdcm(live_plotter=False):
         # ---- visual objects ----
         from cardillo.visualization import (
             Plotter,
-            VisualDiscreteRod,
             VisualSTL,
             # VisualCoordSystem,
-            VisualTendon,
             VisualArUco,
         )
 
@@ -181,10 +178,6 @@ def gen_single_segment_tdcm(live_plotter=False):
             scale=1e-3,
             color=(160, 160, 160),
         )
-        VisualDiscreteRod(rod, subdivision=4)
-        for tendon in tendons:
-            VisualTendon(tendon, radius=1e-3, color=(0, 200, 50))  # (130, 130, 130),
-        # VisualCoordSystem(system.origin, 0.05)
         # ---- plotter ----
         window_size = (960, 540)
         plotter = Plotter(system, window_size)

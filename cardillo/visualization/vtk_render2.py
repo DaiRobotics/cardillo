@@ -4,12 +4,10 @@ from time import perf_counter, sleep
 
 import vtk
 from vtk.util.numpy_support import numpy_to_vtk
-from cardillo.interactions.n_point_interaction import nPointInteraction
 
-from cardillo.rods import CircularCrossSection
+from cardillo.rods import RodTendonForce, DiscreteRod
 from cardillo.rods._base import CosseratRod_PetrovGalerkin
 from cardillo.solver.solution import Solution
-from cardillo import math_jax as mj
 
 
 class _VisualTwinBase(ABC):
@@ -31,84 +29,14 @@ class VisualDiscreteRod(_VisualTwinBase):
     def __init__(
         self,
         rod,
-        subdivision=3,
-        color=(82, 108, 164),
+        subdivision=4,
         opacity=1,
     ):
+        self.rod = rod
         super().__init__(rod)
-        nelement_visual = rod.nelement
-        cross_section = rod.cross_section
 
-        if isinstance(rod.cross_section, CircularCrossSection):
-            weights = [
-                1.0,
-                1.0,
-                1.0,
-                0.5,
-                0.5,
-                0.5,
-            ]
-            degrees = [2, 2, 1]
-            ctype = vtk.VTK_BEZIER_WEDGE
-        # elif isinstance(rod.cross_section, RectangularCrossSection):
-        #     npts = 16
-        #     weights = [1] * 16
-        #     degrees = [1, 1, 3]
-        #     ctype = vtk.VTK_BEZIER_HEXAHEDRON
-        else:
-            raise NotImplementedError
-
-        self._ugrid = vtk.vtkUnstructuredGrid()
-
-        # points
-        self._body_points = np.empty((6 * (nelement_visual + 1), 3), dtype=float)
-        array = numpy_to_vtk(self._body_points, deep=False)
-        vtk_points = vtk.vtkPoints()
-        vtk_points.SetData(array)
-        self._ugrid.SetPoints(vtk_points)
-
-        # cells
-        self._ugrid.Allocate(nelement_visual)
-        for i in range(nelement_visual):
-            self._ugrid.InsertNextCell(
-                ctype,
-                12,
-                list(range(i * 6, i * 6 + 3))
-                + list(range((i + 1) * 6, (i + 1) * 6 + 3))
-                + list(range(i * 6 + 3, (i + 1) * 6))
-                + list(range((i + 1) * 6 + 3, (i + 2) * 6)),
-            )
-
-        # point data: RationalWeights
-        pdata = self._ugrid.GetPointData()
-        array = numpy_to_vtk(np.tile(weights, nelement_visual + 1))
-        pdata.SetRationalWeights(array)
-
-        # cell data: HigherOrderDegrees
-        cdata = self._ugrid.GetCellData()
-        array = numpy_to_vtk(np.repeat([degrees], nelement_visual, axis=0))
-        cdata.SetHigherOrderDegrees(array)
-
-        # cell data: Colors
-        array = numpy_to_vtk(np.repeat([color], nelement_visual, axis=0))
-        array.SetName("Colors")
-        cdata.AddArray(array)
-
-        # cell data: Strains
-        self._strain = np.zeros((nelement_visual, 6), dtype=float)
-        array = numpy_to_vtk(self._strain, deep=False)
-        array.SetName("Strains")
-        array.SetComponentName(0, "B_gamma_x")
-        array.SetComponentName(1, "B_gamma_y")
-        array.SetComponentName(2, "B_gamma_z")
-        array.SetComponentName(3, "B_kappa_x")
-        array.SetComponentName(4, "B_kappa_y")
-        array.SetComponentName(5, "B_kappa_z")
-        cdata.AddArray(array)
-
-        # filter
         filter = vtk.vtkDataSetSurfaceFilter()
-        filter.SetInputData(self._ugrid)
+        filter.SetInputData(rod._ugrid)
         filter.SetNonlinearSubdivisionLevel(subdivision)
 
         mapper = vtk.vtkDataSetMapper()
@@ -116,51 +44,12 @@ class VisualDiscreteRod(_VisualTwinBase):
 
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)
-        actor.GetProperty().SetColor([c / 255 for c in color])
+        actor.GetProperty().SetColor([c / 255 for c in rod._color])
         actor.GetProperty().SetOpacity(opacity)
         self.actors.append(actor)
 
-        # control points on circle
-        phis = np.linspace(0.0, 2.0 * np.pi, 3, endpoint=False)
-        phis2 = phis + (np.pi / 3.0)
-        control_pts = []
-        for n in range(rod.nnode):
-            if cross_section._variable:
-                radius = cross_section.radius(
-                    rod.xi_node[n]
-                )  # Assuming a simple case, adjust as needed
-            else:
-                radius = cross_section.radius
-            # control points on circle
-            xys1 = (
-                np.stack([np.zeros_like(phis), np.cos(phis), np.sin(phis)], axis=1)
-                * radius
-            )
-            # control points out of circle
-            xys2 = np.stack(
-                [np.zeros_like(phis2), np.cos(phis2), np.sin(phis2)], axis=1
-            ) * (2.0 * radius)
-            control_pts.append(np.concatenate([xys1, xys2], axis=0).T)
-        self.control_pts = np.array(control_pts)
-
     def update_visual_state(self, sol_i):
-        rod = self.contr
-        q_rod = sol_i.q[rod.qDOF]
-        q_nodes = rod._view_nodal_q(q_rod)
-        r_OC_nodes = q_nodes[:, :3]
-        A_IB_nodes = mj.Exp_SO3_quat_batch(q_nodes[:, 3:]).__array__()
-        control_pts = r_OC_nodes[:, None] + (A_IB_nodes @ self.control_pts).swapaxes(
-            1, 2
-        )
-        control_pts = control_pts.reshape((-1, 3))
-
-        self._body_points[:] = control_pts
-        self._ugrid.Modified()
-
-        # set stress
-        _, B_gamma, B_kappa = rod._eval(q_rod)
-        self._strain[:, :3] = B_gamma
-        self._strain[:, 3:] = B_kappa
+        self.rod._update_ugrid(sol_i)
 
 
 class _VisualvtkSource(_VisualTwinBase):
@@ -397,54 +286,28 @@ class VisualCoordSystem(_VisualvtkSource):
 
 
 class VisualTendon(_VisualTwinBase):
-    def __init__(self, tendon, radius=1e-3, color=(255, 255, 255), opacity=1):
+    def __init__(self, tendon, radius=1e-3, opacity=1):
+        self.tendon = tendon
         super().__init__(tendon)
-        poly_data = vtk.vtkPolyData()
-        # points
-        npts = 2
-        ncon = self.contr.n_vert
-        self.vtkpoints = vtk.vtkPoints()
-        self.vtkpoints.SetNumberOfPoints(npts * ncon)
-        poly_data.SetPoints(self.vtkpoints)
 
-        # cells
-        poly_data.Allocate(ncon)
-        for i in range(ncon):
-            poly_data.InsertNextCell(
-                vtk.VTK_LINE, npts, list(range(i * npts, (i + 1) * npts))
-            )
-
-        tendon.export = (
-            lambda sol_i, **kwargs: self.update_visual_state(sol_i) or poly_data
-        )
+        poly_data = tendon._poly_data
 
         filter = vtk.vtkTubeFilter()
         filter.SetRadius(radius)
         filter.SetInputData(poly_data)
-        filter.SetNumberOfSides(16)
+        filter.SetNumberOfSides(8)
 
         mapper = vtk.vtkDataSetMapper()
         mapper.SetInputConnection(filter.GetOutputPort())
-        # mapper = vtk.vtkPolyDataMapper()
-        # mapper.SetInputData(poly_data)
 
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)
-        actor.GetProperty().SetColor(([c / 255 for c in color]))
+        actor.GetProperty().SetColor(([c / 255 for c in tendon._color]))
         actor.GetProperty().SetOpacity(opacity)
         self.actors.append(actor)
 
     def update_visual_state(self, sol_i):
-        tendon = self.contr
-        t, q = sol_i.t, sol_i.q[tendon.qDOF]
-        points = []
-        r_OPk = tendon.r_OP_vert(q)
-        for k in range(tendon.n_vert - 1):
-            points.append(r_OPk[k])
-            points.append(r_OPk[k + 1])
-        for i, p in enumerate(points):
-            self.vtkpoints.SetPoint(i, p)
-        self.vtkpoints.Modified()
+        self.tendon._update_poly_data(sol_i)
 
 
 class Plotter:
@@ -457,24 +320,6 @@ class Plotter:
         self.interactor = vtk.vtkRenderWindowInteractor()
         self.window.SetInteractor(self.interactor)
 
-        # ground
-        # grid_size = 0.2
-        # plane = vtk.vtkPlaneSource()
-        # plane.SetOrigin(0, -grid_size, -grid_size)
-        # plane.SetPoint1(0, -grid_size, grid_size,)
-        # plane.SetPoint2(0, grid_size, -grid_size,)
-        # plane.SetXResolution(10)
-        # plane.SetYResolution(10)
-
-        # mapper = vtk.vtkPolyDataMapper()
-        # mapper.SetInputConnection(plane.GetOutputPort())
-
-        # actor = vtk.vtkActor()
-        # actor.SetMapper(mapper)
-        # actor.GetProperty().SetRepresentationToWireframe()
-        # actor.GetProperty().SetColor(0.6, 0.6, 0.6)
-        # self.ren.AddActor(actor)
-
         # camera
         self.cam_widget = vtk.vtkCameraOrientationWidget()
         self.cam_widget.SetParentRenderer(self.ren)
@@ -486,9 +331,23 @@ class Plotter:
         self.__visual_twins = []
         self.system = system
         for contr in system.contributions:
+            if isinstance(contr, DiscreteRod):
+                Twin = VisualDiscreteRod
+            elif isinstance(contr, RodTendonForce):
+                Twin = VisualTendon
+            else:
+                Twin = None
+
+            has_twin = False
             if hasattr(contr, "visual_twins"):
                 for twin in contr.visual_twins:
                     self.__add_visual_twin(twin)
+                    if Twin is not None and isinstance(twin, Twin):
+                        has_twin = True
+
+            if not has_twin and Twin:
+                twin = Twin(contr)
+                self.__add_visual_twin(twin)
 
         self.__window_open = False
 
