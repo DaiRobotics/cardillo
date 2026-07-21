@@ -3,6 +3,7 @@ from scipy.optimize import nnls
 
 from cardillo.actuators._base import BaseActuator
 
+
 # ยะหยา
 class DynamicControllerPD(BaseActuator):
 
@@ -23,6 +24,7 @@ class DynamicControllerPD(BaseActuator):
 
         self.M_tilde_inv = None
         self._c_la_c_inv = None
+        self.nnls_tol = 1e-8
 
     def assembler_callback(self):
         super().assembler_callback()
@@ -81,8 +83,10 @@ class DynamicControllerPD(BaseActuator):
         W_tau = self.W_tau(t, q)
         h = sys.h(t, q_sys, u_sys) + sys.W_c(t, q_sys) @ sys.la_c(t, q_sys, u_sys)
 
-        # J_inv = np.linalg.inv(self.M_tilde_inv @ W_tau) # With 3 tendons
+        # Full Actuation
+        # J_inv = np.linalg.inv(self.M_tilde_inv @ W_tau)
         
+        # Underactuation
         J = self.M_tilde_inv @ W_tau
         J_inv = J.T @ np.linalg.inv(J @ J.T + self.inv_damping * np.eye(3))
 
@@ -93,9 +97,9 @@ class DynamicControllerPD(BaseActuator):
         v_P = self.rod._view_nodal_u(u)[-1, :3]
         a = tau_ref[6:] + self.Kd * (tau_ref[3:6] - v_P) + self.Kp * (tau_ref[:3] - r_OP)
 
-        # la_tau, _ = nnls(J, a + y_0_ddot) # Non-Negative Least Squares
-
         la_tau = J_inv @ (a + y_0_ddot)
+
+        # la_tau, _ = nnls(J, a + y_0_ddot) # Non-Negative Least Squares
         return la_tau
     
 
@@ -109,7 +113,6 @@ class DynamicControllerPD(BaseActuator):
 
         # 3 Tendons Case
         # J_inv = np.linalg.inv(J)
-
 
         # b_q for both cases
         if self._c_la_c_inv is None:
@@ -148,6 +151,31 @@ class DynamicControllerPD(BaseActuator):
 
         la_tau_q = J_pinv_qb + J_pinv @ b_q
         
+        # Non-Negative Least Squares
+        # F = np.where(la_tau > self.nnls_tol)[0] # free tendons (postice)
+        # la_tau_q = np.zeros((self.nla_tau, self._nq))
+        # if len(F) == 0:
+        #     return la_tau_q
+
+        # h = sys.h(t, q_sys, u_sys) + sys.W_c(t, q_sys) @ sys.la_c(t, q_sys, u_sys)
+        # y_0_ddot = -self.M_tilde_inv @ h[self.uDOF]
+        # tau_ref = self.tau(t) # tau_ref = [r_OP_ref_fn, v_P_ref_fn, a_P_ref_fn]
+        # r_OP = self.rod._view_nodal_q(q)[-1, :3]
+        # v_P = self.rod._view_nodal_u(u)[-1, :3]
+        # a = tau_ref[6:] + self.Kd * (tau_ref[3:6] - v_P) + self.Kp * (tau_ref[:3] - r_OP)
+        # b = a + y_0_ddot
+
+        # JF = J[:, F] # Pick out the positive forces
+        # A_inv = np.linalg.inv(JF.T @ JF)
+        # JF_pinv = A_inv @ JF.T
+        # la_tau_F = la_tau[F]
+        # r = b - JF @ la_tau_F
+
+        # J_qk = np.einsum("ai,ijk->ajk", self.M_tilde_inv, self.W_tau_q(t,q))
+        # JF_qk = J_qk[:, F, :]
+        # la_tau_F_q = A_inv @ np.einsum("afk,a->fk", JF_qk, r) + JF_pinv @ (b_q - np.einsum("afk,f->ak", JF_qk, la_tau_F))
+        # la_tau_q[F, :] = la_tau_F_q 
+
         return la_tau_q
 
 
@@ -179,6 +207,17 @@ class DynamicControllerPD(BaseActuator):
         # Underactuation
         J_pinv = J.T @ np.linalg.inv(J @ J.T + self.inv_damping * np.eye(3))
         la_tau_u = J_pinv @ b_u
+
+        # Non-Negative Least Squares
+        # F = np.where(self.la_tau(t, q, u) > self.nnls_tol)[0]
+        # la_tau_u = np.zeros((self.nla_tau, self._nu))
+        # if len(F) == 0:
+        #     return la_tau_u
+
+        # JF = J[:, F]
+        # JF_pinv = np.linalg.inv(JF.T @ JF) @ JF.T
+        # la_tau_u[F, :] = JF_pinv @ b_u
+
         return la_tau_u
     
     def step_callback(self, t, q, u):

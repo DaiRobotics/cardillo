@@ -715,17 +715,33 @@ def p2p_vis_plot(dynamic_model, sol, r_OP_ref_fn):
     fig.tight_layout()
 
 
+    # fig2, ax = plt.subplots(4, 1, num="Error", figsize=(8, 8), sharex=True)
+    # for i, lbl in enumerate(("e_x", "e_y", "e_z")):
+    #     ax[i].plot(t, e[:, i], "r")
+    #     ax[i].set_ylabel(rf"${lbl}$ [m]")
+    #     ax[i].grid(True)
+
+    # ax[3].plot(t, e_n, "k")              
+    # ax[3].set_ylabel(r"$e_{norm}$ [m]")
+    # ax[3].grid(True)
+
+    # ax[-1].set_xlabel("Time [s]")          
+    # fig2.suptitle("Tracking Error per Direction (E to A)")
+    # fig2.tight_layout()
+
     fig2, ax = plt.subplots(4, 1, num="Error", figsize=(8, 8), sharex=True)
     for i, lbl in enumerate(("e_x", "e_y", "e_z")):
-        ax[i].plot(t, e[:, i], "r")
-        ax[i].set_ylabel(rf"${lbl}$ [m]")
-        ax[i].grid(True)
+        ax[i].plot(t, np.abs(e[:, i]), "r")
+        ax[i].set_yscale("log")
+        ax[i].set_ylabel(rf"$|{lbl}|$ [m]")
+        ax[i].grid(True, which="both")          # "both" → minor gridlines too
 
-    ax[3].plot(t, e_n, "k")              
+    ax[3].plot(t, e_n, "k")                     # e_norm is already ≥ 0
+    ax[3].set_yscale("log")
     ax[3].set_ylabel(r"$e_{norm}$ [m]")
-    ax[3].grid(True)
+    ax[3].grid(True, which="both")
 
-    ax[-1].set_xlabel("Time [s]")          
+    ax[-1].set_xlabel("Time [s]")
     fig2.suptitle("Tracking Error per Direction (E to A)")
     fig2.tight_layout()
 

@@ -56,7 +56,10 @@ class CommonModel(ABC):
         rod_nelement = 10  # 1000
         rod_l0 = 0.192  # [m] length of rod
         rod_r0_base = 1.4e-2  # [m] radius at bottom of rod
-        rod_r0_tip = 8.5e-3  # [m] radius at tip of rod
+        # rod_r0_tip = 8.5e-3  # [m] radius at tip of rod (original with 60% tip to base ratio)
+        # rod_r0_tip = 8.5e-3 * 0.5  # [m] radius at tip of rod for 30% tip to base ratio
+        # rod_r0_tip = 8.5e-3 * 1.5  # [m] radius at tip of rod for 90% tip to base ratio
+        rod_r0_tip = 1.4e-2 * 0.95  # [m] radius at tip of rod for 100% tip to base ratio
         self.rod_density = 1.41e3  # density of material
         rod_A_IB0 = np.zeros((3, 3), dtype=np.float64)
         rod_A_IB0[0, 1] = rod_A_IB0[1, 2] = rod_A_IB0[2, 0] = 1
@@ -169,19 +172,19 @@ if __name__ == "__main__":
 
     damping_ratio = 0.1
     model = CommonModel(damping_ratio=damping_ratio) # dt = 1e-4 for damping_ratio = 1e-3
-    model.rod.q0 = q0_E.copy() # Start at E
+    # model.rod.q0 = q0_E.copy() # Start at E
     system = model.system
     rod = model.rod
     tendons = model.tendons
     
     # Parameters
-    Kp = 400.0
-    Kd = 40.0
+    Kp = 200.0
+    Kd = 20.0
     inv_damping = 1e-3
 
     # Trajectories
     # r_OP_ref_fn = lambda t: np.array([0.0, 0.0, 0.192])
-    # r_OP_ref_fn = lambda t: SETPOINT_TABLE["A"]
+    r_OP_ref_fn = lambda t: SETPOINT_TABLE["A"]
     
     # P2P Setpoints Trajectory
     # def p2p_sequence(names, t_hold=5.0):
@@ -193,8 +196,8 @@ if __name__ == "__main__":
 
     # No smoothing
     # r_OP_ref_fn = p2p_sequence(["A", "B", "C", "D", "E"], t_hold=5.0)
-    # v_P_ref_fn = lambda t: np.zeros(3)
-
+    v_P_ref_fn = lambda t: np.zeros(3)
+    a_P_ref_fn = lambda t: np.zeros(3)
 
     def smooth_p2p_sequence(names, t_hold=5.0, t_move=1.0):
         pts = [SETPOINT_TABLE[name] for name in names]
@@ -222,15 +225,15 @@ if __name__ == "__main__":
         return (lambda t: ref_fns(t)[0], lambda t: ref_fns(t)[1], lambda t: ref_fns(t)[2])
 
     # Smoothing
-    r_OP_ref_fn , v_P_ref_fn, a_P_ref_fn = smooth_p2p_sequence(["A", "B", "C", "D", "E"], t_hold=5.0, t_move=1.0)
+    # r_OP_ref_fn , v_P_ref_fn, a_P_ref_fn = smooth_p2p_sequence(["A", "B", "C", "D", "E"], t_hold=5.0, t_move=1.0)
 
     controller = DynamicControllerPD(system, rod, tendons, r_OP_ref_fn, v_P_ref_fn=v_P_ref_fn, a_P_ref_fn=a_P_ref_fn, Kp=Kp, Kd=Kd, inv_damping=inv_damping)
     system.add(controller)
     system.assemble()
 
     # Solver
-    t_sim = 25
-    # t_sim = 1.0
+    # t_sim = 25
+    t_sim = 5
     # t_sim = 0.5
     dt = 1e-4
     # solver = BackwardEuler(system, t_sim, dt)
