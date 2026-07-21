@@ -21,7 +21,8 @@ from cardillo.system import System
 from cardillo.interactions import nPointInteraction
 
 import numpy as np
-from scipy.sparse.linalg import splu
+from pathlib import Path
+import pandas as pd
 
 from espedal_control_test import p2p_vis_plot
 from runge_kutta import *
@@ -162,8 +163,13 @@ def compute_la_ts(controller, sol):
     return la_ts
 
 if __name__ == "__main__":
+
+    csv_file = Path(__file__).parent / "p2p_q0_gamma0.csv"
+    q0_E = pd.read_csv(csv_file)["q0_E"].to_numpy()
+
     damping_ratio = 0.1
     model = CommonModel(damping_ratio=damping_ratio) # dt = 1e-4 for damping_ratio = 1e-3
+    model.rod.q0 = q0_E.copy() # Start at E
     system = model.system
     rod = model.rod
     tendons = model.tendons
@@ -178,18 +184,47 @@ if __name__ == "__main__":
     # r_OP_ref_fn = lambda t: SETPOINT_TABLE["A"]
     
     # P2P Setpoints Trajectory
-    def make_sequence_ref(names, t_hold=5.0):
-        pts = [SETPOINT_TABLE[n] for n in names]
-        def r_OP_ref_fn(t):
-            idx = min(int(t // t_hold), len(pts) - 1)
-            return pts[idx]
-        return r_OP_ref_fn
+    # def p2p_sequence(names, t_hold=5.0):
+    #     pts = [SETPOINT_TABLE[n] for n in names]
+    #     def r_OP_ref_fn(t):
+    #         idx = min(int(t // t_hold), len(pts) - 1)
+    #         return pts[idx]
+    #     return r_OP_ref_fn
 
-    r_OP_ref_fn = make_sequence_ref(["A", "B", "C", "D", "E"], t_hold=5.0)
-    v_P_ref_fn = lambda t: np.zeros(3)
-    
+    # No smoothing
+    # r_OP_ref_fn = p2p_sequence(["A", "B", "C", "D", "E"], t_hold=5.0)
+    # v_P_ref_fn = lambda t: np.zeros(3)
 
-    controller = DynamicControllerPD(system, rod, tendons, r_OP_ref_fn, v_P_ref_fn, Kp=Kp, Kd=Kd, inv_damping=inv_damping)
+
+    def smooth_p2p_sequence(names, t_hold=5.0, t_move=1.0):
+        pts = [SETPOINT_TABLE[name] for name in names]
+        n = len(pts)
+        t_transition = 0.5 * t_move
+
+        def smoothing(r_OP0, r_OP1, s, T):
+            d = r_OP1 - r_OP0
+            zd = r_OP0 + d * (10*s**3 - 15*s**4 + 6*s**5)
+            zd_dot = d * (30*s**2 - 60*s**3 + 30*s**4) / T
+            zd_ddot = d * (60*s - 180*s**2 + 120*s**3) / (T**2)
+            return zd, zd_dot, zd_ddot
+
+        def ref_fns(t):
+            seg = max(0 ,min(int(t // t_hold), n - 1))
+            t_seg0 = seg * t_hold
+            t_seg1 = (seg + 1) * t_hold
+            # entering segment
+            if seg >= 1 and (t - t_seg0) < t_transition:
+                return smoothing(pts[seg-1], pts[seg], (t - (t_seg0 - t_transition)) / t_move, t_move)
+            if seg <= n - 2 and (t_seg1 - t) < t_transition:         # about to leave seg (to seg+1)
+                return smoothing(pts[seg], pts[seg+1], (t - (t_seg1 - t_transition)) / t_move, t_move)
+            return pts[seg], np.zeros(3), np.zeros(3) # hold
+
+        return (lambda t: ref_fns(t)[0], lambda t: ref_fns(t)[1], lambda t: ref_fns(t)[2])
+
+    # Smoothing
+    r_OP_ref_fn , v_P_ref_fn, a_P_ref_fn = smooth_p2p_sequence(["A", "B", "C", "D", "E"], t_hold=5.0, t_move=1.0)
+
+    controller = DynamicControllerPD(system, rod, tendons, r_OP_ref_fn, v_P_ref_fn=v_P_ref_fn, a_P_ref_fn=a_P_ref_fn, Kp=Kp, Kd=Kd, inv_damping=inv_damping)
     system.add(controller)
     system.assemble()
 

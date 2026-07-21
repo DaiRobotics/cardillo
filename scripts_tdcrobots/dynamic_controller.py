@@ -1,16 +1,17 @@
 import numpy as np
+from scipy.optimize import nnls
 
 from cardillo.actuators._base import BaseActuator
 
 # ยะหยา
 class DynamicControllerPD(BaseActuator):
 
-    def __init__(self, system, rod, tendons, r_OP_ref, v_P_ref=None, a_P_ref=None, Kp=0.0, Kd=0.0, inv_damping=1e-3, name="dynamic_controller"):
-        if a_P_ref is None:
-            a_P_ref = lambda t: np.zeros(3)
-        if v_P_ref is None:
-            v_P_ref = lambda t: np.zeros(3)
-        tau = lambda t: np.concatenate([r_OP_ref(t), v_P_ref(t), a_P_ref(t)])
+    def __init__(self, system, rod, tendons, r_OP_ref_fn, v_P_ref_fn=None, a_P_ref_fn=None, Kp=0.0, Kd=0.0, inv_damping=1e-3, name="dynamic_controller"):
+        if a_P_ref_fn is None:
+            a_P_ref_fn = lambda t: np.zeros(3)
+        if v_P_ref_fn is None:
+            v_P_ref_fn = lambda t: np.zeros(3)
+        tau = lambda t: np.concatenate([r_OP_ref_fn(t), v_P_ref_fn(t), a_P_ref_fn(t)])
         super().__init__(rod, tau, nla_tau=len(tendons), ntau=9)
         self.system = system
         self.rod = rod
@@ -92,7 +93,10 @@ class DynamicControllerPD(BaseActuator):
         v_P = self.rod._view_nodal_u(u)[-1, :3]
         a = tau_ref[6:] + self.Kd * (tau_ref[3:6] - v_P) + self.Kp * (tau_ref[:3] - r_OP)
 
-        return J_inv @ (a + y_0_ddot)
+        # la_tau, _ = nnls(J, a + y_0_ddot) # Non-Negative Least Squares
+
+        la_tau = J_inv @ (a + y_0_ddot)
+        return la_tau
     
 
     def la_tau_q(self, t, q, u):
