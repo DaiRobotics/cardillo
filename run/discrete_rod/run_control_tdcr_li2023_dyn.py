@@ -22,11 +22,11 @@ from cardillo_example_systems.tdcr_li2023 import gen_tdcr_li2023
 ##############
 # Setup system
 ##############
-Kp = 1
+Kp = 100
 G_ACCEL = 9.81
 damping_ratio = 0.01
-t_sim = 10
-la_t_0 = np.array([0, 0, 0, 0], dtype=np.float64)
+t_sim = 0.1
+la_t_0 = np.array([1, 1, 1, 1], dtype=np.float64) * 0
 ret = gen_tdcr_li2023(rod_nelement=10, g_accel=G_ACCEL, statics=True)
 system_stat = ret["system"]
 tendons_stat = ret["tendons"]
@@ -57,9 +57,10 @@ sol_stat = newton.solve()
 x0 = newton.x[-1]
 q0_stat = sol_stat.q[-1]
 r_des = q0_stat[-7:-4] + 0.1 * (q0_stat[:3] - q0_stat[-7:-4])
+# r_des = np.array([0.0, 0.0, 0.2])
 print(f"r_des: {r_des}")
 
-q0_dyn = np.concatenate((q0_stat, la_t_0))
+q0_dyn = q0_stat
 u0 = np.zeros_like(sol_stat.u[-1])
 system_dyn.set_new_initial_state(q0_dyn, u0)
 
@@ -74,81 +75,60 @@ system_dyn.set_new_initial_state(q0_dyn, u0)
 # Runge Kutta solver
 ####################
 nq = system_dyn.nq
-nu = system_dyn.nu
 n_tau = system_dyn.nla_tau
-# q0_dyn, u0 = system_dyn.q0, system_dyn.u0
 y0 = np.concatenate((q0_dyn, u0))
 M_inv = scipy.sparse.linalg.inv(system_dyn.M(0, q0_dyn).tocsc()).tocsr()
 x = newton.x[-1]
 f = newton.fun(x, 1)
 
-
-def compute_dr_OP_dla_t(t, y):
-    global x, f, dr_OP_dla_t_inv
-    t = float(t)
-    # static solver
-    la_t = y[nq : nq + n_tau]
-    for td, la in zip(tendons_stat, la_t):
-        td.la_tau = lambda t, q, u, la=la: la
-    sol = fsolve(
-        newton.fun,
-        x,
-        f0=f,
-        jac=newton.jac,
-        fun_args=(1,),
-        jac_args=(1,),
-        options=newton.options,
-    )
-    assert sol.success, f"Static solver failed to converge: {la_t}"
-    x = sol.x
-    q_stat = x[: system_stat.nq]
-    f = newton.fun(x, 1)
-    df_dx = newton.jac(x, 1)
-    df_dla_t = np.zeros((newton.nx, system_stat.nla_tau), dtype=np.float64)
-    df_dla_t[: system_stat.nu] = system_stat.W_tau(t, q_stat, format="Coo").toarray(
-        fix_size=True
-    )
-    dx_dla_t = scipy.sparse.linalg.spsolve(df_dx, -df_dla_t)
-    dq_dla_t = dx_dla_t[: system_stat.nq]
-    dr_OP_dla_t_inv = scipy.linalg.pinv(
-        dq_dla_t[-7:-4]
-    )  # (pseudo-) inverse of dr_OP_dla_t
-    return dr_OP_dla_t_inv
-
-
-W_tau_coo = CooMatrix((nu, n_tau), manual_sync=True)
+W_tau_coo = CooMatrix((system_dyn.nu, system_dyn.nla_tau), manual_sync=True)
 
 
 def dydt(t, y):
     global dr_OP_dla_t_inv
     global W_tau_coo
     t = float(t)
-    q, u = y[:nq], y[-nu:]
-    la_tau = y[nq:-nu]
+    q, u = y[:nq], y[nq:]
     h = system_dyn.h(t, q, u)
     W_c = rod_dyn.W_c(t, q).tocsr(fix_size=True)
     la_c = rod_dyn.la_c(t, q, u)
     W_tau_coo = system_dyn.W_tau(t, q, format="Coo", coo=W_tau_coo)
+    f_int = W_c @ la_c
+    f = h + f_int
 
     # control input
     r_OP = q[-7:-4]
-    la_t_dot = dr_OP_dla_t_inv @ (r_des - r_OP) * Kp
+    v_P = u[-6:-3]
+    e = r_des - r_OP
+    e_dot = -v_P
+    W_tau_coo.manual_sync()
+    W_tau = W_tau_coo.tocsr(fix_size=True)
+    M_inv_W_tau = M_inv @ W_tau
+    # force compensation
+    # la_tau_comp = scipy.sparse.linalg.lsqr(W_tau[-6:-3, :], -f[-6:-3])[0]
+    # la_tau_comp = scipy.optimize.lsq_linear(W_tau[-6:-3, :], -f[-6:-3], bounds=(0, np.inf))['x']
+    la_tau_comp = (
+        np.linalg.lstsq(W_tau[-6:-3, :].toarray(), -f[-6:-3], rcond=None)[0] * 1
+    )
+    # feedback control
+    J = M_inv_W_tau[-6:-3, :]
+    la_tau_ctrl = scipy.sparse.linalg.lsqr(J, 2 * Kp * e_dot + Kp**2 * e)[0] * 1
+    # la_tau_ctrl = scipy.optimize.lsq_linear(J, 2 * Kp * e_dot + Kp**2 * e, bounds=(0, np.inf))['x'] * 0
+
+    la_tau = la_tau_ctrl + la_tau_comp
+
+    # print(np.round(e, 3), "\t", np.round(la_tau_ctrl, 5),"\t", np.round(la_tau_comp, 5),"\t", np.round(la_tau, 5))
 
     # update q_dot
-    q_dot = np.concatenate((rod_dyn.q_dot(t, q, u), la_t_dot))
+    q_dot = np.array(rod_dyn.q_dot(t, q, u))
     q_dot[:7] = 0.0  # fix the first node
 
     # update u_dot
-    W_tau_coo.manual_sync()
-    W_tau = W_tau_coo.tocsr(fix_size=True)
-    u_dot = M_inv @ (h + W_c @ la_c + W_tau @ la_tau)
+    u_dot = M_inv @ f + M_inv_W_tau @ la_tau
     u_dot[:6] = 0.0  # fix the first node
 
     dydt = np.concatenate((q_dot, u_dot))
     return dydt
-
-
-dr_OP_dla_t_inv = compute_dr_OP_dla_t(0, q0_dyn)
 
 
 def step_callback(t, y):
@@ -166,28 +146,19 @@ t, y = solve_ivp_sequence(
     method="RK23",
     max_step=1e-3,
     step_callback=step_callback,
-    ivp_callback=compute_dr_OP_dla_t,
-    rtol=1.0e-8,
-    atol=1.0e-10,
+    rtol=1.0e-3,
+    atol=1.0e-6,
 )
 
-# def step_callback(t, y):
-#     t = float(t)
-#     q, u = y[:nq], y[nq:]
-#     system_dyn.step_callback(t, q, u)
-
-#     # update jacobian dr_OP_dla_t
-#     compute_dr_OP_dla_t(t, y)
-
-
 # t, y = runge_kutta_3_8(dydt, y0, 0, t_sim, 1e-3, step_callback=step_callback)
+
 
 ###############
 # visualization
 ###############
 q = y[:, :nq]
-la_t = y[:, nq:-nu]
 r_OP = q[:, rod_dyn.qDOF].reshape((-1, rod_dyn.nnode, 7))[:, -1, :3]
+la_t = q[:, -4:]
 fig = plt.figure(figsize=(12, 12))
 gs = fig.add_gridspec(4, 2)
 

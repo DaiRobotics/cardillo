@@ -83,21 +83,13 @@ def gen_tdcr_li2023(rod_nelement=10, g_accel=9.81, damping_ratio=0, statics=True
         for phi in np.linspace(0, 2 * np.pi, n_tendons, endpoint=False)
     ]
     for B_r_CP_list in B_r_CP_lists:
-        n = len(B_r_CP_list)
-        if statics:
-            tendon = RodTendonForce(
-                rod,
-                [i / (n - 1) for i in range(n)],
-                B_r_CPs=B_r_CP_list,
-            )
-            tendons.append(tendon)
-        else:
-            tendon = RodTendonForceIntegrator(
-                rod,
-                [i / (n - 1) for i in range(n)],
-                B_r_CPs=B_r_CP_list,
-            )
-            tendons.append(tendon)
+        n_vert = len(B_r_CP_list)
+        tendon = RodTendonForce(
+            rod,
+            [i / (n_vert - 1) for i in range(n_vert)],
+            B_r_CPs=B_r_CP_list,
+        )
+        tendons.append(tendon)
 
     system.add(rod, rc, *tendons)
 

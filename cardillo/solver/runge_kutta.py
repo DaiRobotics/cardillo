@@ -66,7 +66,8 @@ def solve_ivp_sequence(
     dt_sequence=1e-2,
     method="RK45",
     max_step=1e-3,
-    rtol=1.0e-8, atol=1.0e-10,
+    rtol=1.0e-8,
+    atol=1.0e-10,
     step_callback=lambda t, y: None,
     ivp_callback=lambda t, y: None,
     verbose=True,
@@ -81,12 +82,12 @@ def solve_ivp_sequence(
 
     if verbose:
         pbar = tqdm(
-            total=int((tf - t0) / dt_sequence ), desc=f"Method {method}", unit="event"
+            total=int((tf - t0) / dt_sequence), desc=f"Method {method}", unit="event"
         )
     i = 0
     while t_current < tf:
-        t_end = min(t0 + (i + 1) * dt_sequence , tf)
-        t_eval = np.arange(t_current, t_end + max_step/2, max_step)
+        t_end = min(t0 + (i + 1) * dt_sequence, tf)
+        t_eval = np.arange(t_current, t_end + max_step / 2, max_step)
         t_eval[-1] = t_end  # Ensure the last time point is exactly t_end
         sol = solve_ivp(
             dydt,
@@ -97,7 +98,8 @@ def solve_ivp_sequence(
             dense_output=False,
             events=[_step_callback],
             max_step=max_step,
-            rtol=rtol, atol=atol
+            rtol=rtol,
+            atol=atol,
         )
         t = sol.t
         y = sol.y.T
