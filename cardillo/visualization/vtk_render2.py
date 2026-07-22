@@ -399,28 +399,25 @@ class VisualCoordSystem(_VisualvtkSource):
 class VisualTendon(_VisualTwinBase):
     def __init__(self, tendon, radius=1e-3, color=(255, 255, 255), opacity=1):
         super().__init__(tendon)
-        poly_data = vtk.vtkPolyData()
+        n_vert = self.contr.n_vert
+        self._poly_data = vtk.vtkPolyData()
         # points
-        npts = 2
-        ncon = self.contr.n_vert
-        self.vtkpoints = vtk.vtkPoints()
-        self.vtkpoints.SetNumberOfPoints(npts * ncon)
-        poly_data.SetPoints(self.vtkpoints)
+        self._points = np.empty((n_vert, 3), dtype=float)
+        array = numpy_to_vtk(self._points, deep=False)
+        vtk_points = vtk.vtkPoints()
+        vtk_points.SetData(array)
+
+        self._poly_data.SetPoints(vtk_points)
 
         # cells
-        poly_data.Allocate(ncon)
-        for i in range(ncon):
-            poly_data.InsertNextCell(
-                vtk.VTK_LINE, npts, list(range(i * npts, (i + 1) * npts))
-            )
-
-        tendon.export = (
-            lambda sol_i, **kwargs: self.update_visual_state(sol_i) or poly_data
+        self._poly_data.Allocate(1)
+        self._poly_data.InsertNextCell(
+            vtk.VTK_LINE, n_vert, np.arange(n_vert)
         )
 
         filter = vtk.vtkTubeFilter()
         filter.SetRadius(radius)
-        filter.SetInputData(poly_data)
+        filter.SetInputData(self._poly_data)
         filter.SetNumberOfSides(16)
 
         mapper = vtk.vtkDataSetMapper()
@@ -436,15 +433,9 @@ class VisualTendon(_VisualTwinBase):
 
     def update_visual_state(self, sol_i):
         tendon = self.contr
-        t, q = sol_i.t, sol_i.q[tendon.qDOF]
-        points = []
-        r_OPk = tendon.r_OP_vert(q)
-        for k in range(tendon.n_vert - 1):
-            points.append(r_OPk[k])
-            points.append(r_OPk[k + 1])
-        for i, p in enumerate(points):
-            self.vtkpoints.SetPoint(i, p)
-        self.vtkpoints.Modified()
+        q = sol_i.q[tendon.qDOF]
+        self._points[:] = tendon.r_OP_vert(q)
+        self._poly_data.Modified()
 
 
 class Plotter:

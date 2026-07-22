@@ -2,6 +2,9 @@ from abc import ABC
 import numpy as np
 from numpy.lib.stride_tricks import as_strided
 
+import vtk
+from vtk.util.numpy_support import numpy_to_vtk
+
 from jax import vmap, jit, jacrev
 from jax import numpy as jnp
 
@@ -15,10 +18,9 @@ from cardillo import math_jax
 from cardillo.math import A_IB_basic
 from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.utility.check_time_derivatives import check_time_derivatives
-from cardillo.utility.cachetools import MyLRUCache
-from cardillo.visualization.vtk_render2 import VisualDiscreteRod
+from cardillo import math_jax as mj
 
-from ._cross_section import CrossSectionInertias
+from ._cross_section import CrossSectionInertias, CircularCrossSection
 
 E3 = jnp.eye(3, dtype=jnp.float64)
 Z3 = jnp.zeros((3, 3))
@@ -506,6 +508,7 @@ class DiscreteRod:
         cross_section_inertias=CrossSectionInertias(),
         name="discrete_rod",
         damping_ratio=0.0,
+        color=(82, 108, 164)
     ):
         self.cross_section = cross_section
         self.material_model = material_model
@@ -601,6 +604,8 @@ class DiscreteRod:
                 return self._c_u_coo
 
             self.c_u = c_u
+
+        self._init_ugrid(color)
 
     def __jit_func__(self):
         self._eval = jit(
@@ -1089,8 +1094,115 @@ class DiscreteRod:
     def B_Psi_u(self, t, qe, ue, ue_dot, xi):
         return ElementKinematics.B_Psi_u
 
+    def _init_ugrid(self, color):
+        nelement = self.nelement
+        if isinstance(self.cross_section, CircularCrossSection):
+            weights = [
+                1.0,
+                1.0,
+                1.0,
+                0.5,
+                0.5,
+                0.5,
+            ]
+            degrees = [2, 2, 1]
+            ctype = vtk.VTK_BEZIER_WEDGE
+        # elif isinstance(rod.cross_section, RectangularCrossSection):
+        #     npts = 16
+        #     weights = [1] * 16
+        #     degrees = [1, 1, 3]
+        #     ctype = vtk.VTK_BEZIER_HEXAHEDRON
+        else:
+            raise NotImplementedError
+
+        self._ugrid = vtk.vtkUnstructuredGrid()
+
+        # points
+        self._body_points = np.empty((6 * (nelement + 1), 3), dtype=float)
+        array = numpy_to_vtk(self._body_points, deep=False)
+        vtk_points = vtk.vtkPoints()
+        vtk_points.SetData(array)
+        self._ugrid.SetPoints(vtk_points)
+
+        # cells
+        self._ugrid.Allocate(nelement)
+        for i in range(nelement):
+            self._ugrid.InsertNextCell(
+                ctype,
+                12,
+                list(range(i * 6, i * 6 + 3))
+                + list(range((i + 1) * 6, (i + 1) * 6 + 3))
+                + list(range(i * 6 + 3, (i + 1) * 6))
+                + list(range((i + 1) * 6 + 3, (i + 2) * 6)),
+            )
+
+        # point data: RationalWeights
+        pdata = self._ugrid.GetPointData()
+        array = numpy_to_vtk(np.tile(weights, nelement + 1))
+        pdata.SetRationalWeights(array)
+
+        # cell data: HigherOrderDegrees
+        cdata = self._ugrid.GetCellData()
+        array = numpy_to_vtk(np.repeat([degrees], nelement, axis=0))
+        cdata.SetHigherOrderDegrees(array)
+
+        # cell data: Colors
+        array = numpy_to_vtk(np.repeat([color], nelement, axis=0))
+        array.SetName("Colors")
+        cdata.AddArray(array)
+
+        # cell data: Strains
+        self._strain = np.zeros((nelement, 6), dtype=float)
+        array = numpy_to_vtk(self._strain, deep=False)
+        array.SetName("Strains")
+        array.SetComponentName(0, "B_gamma_x")
+        array.SetComponentName(1, "B_gamma_y")
+        array.SetComponentName(2, "B_gamma_z")
+        array.SetComponentName(3, "B_kappa_x")
+        array.SetComponentName(4, "B_kappa_y")
+        array.SetComponentName(5, "B_kappa_z")
+        cdata.AddArray(array)
+
+        # control points on circle
+        phis = np.linspace(0.0, 2.0 * np.pi, 3, endpoint=False)
+        phis2 = phis + (np.pi / 3.0)
+        points = []
+        for n in range(self.nnode):
+            if self.cross_section._variable:
+                radius = self.cross_section.radius(
+                    self.xi_node[n]
+                )  # Assuming a simple case, adjust as needed
+            else:
+                radius = self.cross_section.radius
+            # on circle
+            xys1 = (
+                np.stack([np.zeros_like(phis), np.cos(phis), np.sin(phis)], axis=1)
+                * radius
+            )
+            # out of circle
+            xys2 = np.stack(
+                [np.zeros_like(phis2), np.cos(phis2), np.sin(phis2)], axis=1
+            ) * (2.0 * radius)
+            points.append(np.concatenate([xys1, xys2], axis=0).T)
+        self._ctrl_pts_bezier_circle = np.array(points)
+
+    def _update_ugrid(self, sol_i, strain=False):
+        q_rod = sol_i.q[self.qDOF]
+        q_nodes = self._view_nodal_q(q_rod)
+        r_OC_nodes = q_nodes[:, :3]
+        A_IB_nodes = mj.Exp_SO3_quat_norm_batch(q_nodes[:, 3:]).__array__()
+        points = r_OC_nodes[:, None] + (
+            A_IB_nodes @ self._ctrl_pts_bezier_circle
+        ).swapaxes(1, 2)
+        self._body_points[:] = points.reshape((-1, 3))
+        self._ugrid.Modified()
+
+        # set strain data
+        if strain:
+            _, B_gamma, B_kappa = self._eval(q_rod)
+            self._strain[:, :3] = B_gamma
+            self._strain[:, 3:] = B_kappa
+
     def export(self, sol_i, **kwargs):
-        if not hasattr(self, "_visual_twin"):
-            self._visual_twin = VisualDiscreteRod(self)
-        self._visual_twin.update_visual_state(sol_i)
-        return self._visual_twin._ugrid
+        self._update_ugrid(sol_i, strain=True)
+        return self._ugrid

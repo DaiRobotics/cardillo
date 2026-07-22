@@ -1,5 +1,7 @@
 import numpy as np
 from jax import jit, numpy as jnp, vmap
+import vtk 
+from vtk.util.numpy_support import numpy_to_vtk
 
 from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.rods.discreteRod import ElementKinematics
@@ -119,6 +121,7 @@ class RodTendonForce:
             nu0, nu1, nu2 = self._nu[k : k + 3]
             nq0, nq1, nq2 = self._nq[k : k + 3]
             self._W_q_coo[nu0:nu2, nq0:nq2] = np.empty((nu2 - nu0, nq2 - nq0))
+        self._init_poly_data()
 
     def assembler_callback(self):
         rod = self.rod
@@ -145,3 +148,29 @@ class RodTendonForce:
 
     def set_force(self, force):
         self.la = force if callable(force) else lambda t: force
+
+
+    def _init_poly_data(self):
+        self._poly_data = vtk.vtkPolyData()
+        # points
+        self._points = np.empty((self.n_vert, 3), dtype=float)
+        array = numpy_to_vtk(self._points, deep=False)
+        vtk_points = vtk.vtkPoints()
+        vtk_points.SetData(array)
+
+        self._poly_data.SetPoints(vtk_points)
+
+        # cells
+        self._poly_data.Allocate(1)
+        self._poly_data.InsertNextCell(
+            vtk.VTK_LINE, self.n_vert, np.arange(self.n_vert)
+        )
+
+    def export(self, sol_i, **kwargs):
+        self._update_poly_data(sol_i)
+        return self._poly_data
+    
+    def _update_poly_data(self, sol_i):
+        q = sol_i.q[self.qDOF]
+        self._points[:] = self.r_OP_vert(q)
+        self._poly_data.Modified()
