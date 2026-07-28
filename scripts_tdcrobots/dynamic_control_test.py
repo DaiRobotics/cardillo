@@ -56,10 +56,10 @@ class CommonModel(ABC):
         rod_nelement = 10  # 1000
         rod_l0 = 0.192  # [m] length of rod
         rod_r0_base = 1.4e-2  # [m] radius at bottom of rod
-        # rod_r0_tip = 8.5e-3  # [m] radius at tip of rod (original with 60% tip to base ratio)
+        rod_r0_tip = 8.5e-3  # [m] radius at tip of rod (original with 60% tip to base ratio)
         # rod_r0_tip = 8.5e-3 * 0.5  # [m] radius at tip of rod for 30% tip to base ratio
         # rod_r0_tip = 8.5e-3 * 1.5  # [m] radius at tip of rod for 90% tip to base ratio
-        rod_r0_tip = 1.4e-2 * 0.95  # [m] radius at tip of rod for 100% tip to base ratio
+        # rod_r0_tip = 1.4e-2 * 0.95  # [m] radius at tip of rod for 100% tip to base ratio
         self.rod_density = 1.41e3  # density of material
         rod_A_IB0 = np.zeros((3, 3), dtype=np.float64)
         rod_A_IB0[0, 1] = rod_A_IB0[1, 2] = rod_A_IB0[2, 0] = 1
@@ -228,13 +228,13 @@ if __name__ == "__main__":
     # r_OP_ref_fn , v_P_ref_fn, a_P_ref_fn = smooth_p2p_sequence(["A", "B", "C", "D", "E"], t_hold=5.0, t_move=1.0)
 
     controller = DynamicControllerPD(system, rod, tendons, r_OP_ref_fn, v_P_ref_fn=v_P_ref_fn, a_P_ref_fn=a_P_ref_fn, Kp=Kp, Kd=Kd, inv_damping=inv_damping)
-    system.add(controller)
+    # system.add(controller)
     system.assemble()
 
     # Solver
     # t_sim = 25
-    t_sim = 5
-    # t_sim = 0.5
+    # t_sim = 5
+    t_sim = 2
     dt = 1e-4
     # solver = BackwardEuler(system, t_sim, dt)
     solver = ScipyDAE(system, t_sim, dt)
@@ -242,6 +242,8 @@ if __name__ == "__main__":
     fixed_qDOF = rod.qDOF[rod.nodalDOF[0]]
     fixed_uDOF = rod.uDOF[rod.nodalDOF_u[0]]
     # solver = RungeKutta(system, t_sim, dt, fixed_qDOF=fixed_qDOF, fixed_uDOF=fixed_uDOF) # Doesn't work when damping is added
+    # solver = RungeKuttaAdaptive(system, t_sim, dt=1e-3, fixed_qDOF=fixed_qDOF, fixed_uDOF=fixed_uDOF, rtol=1e-4, atol=1e-7)
+    # solver = RungeKutta45(system, t_sim, dt=1e-3, fixed_qDOF=fixed_qDOF, fixed_uDOF=fixed_uDOF, rtol=1e-4, atol=1e-7)
 
     # Test to see the solution exploding due to la_tau not being updated properly
     # solver = ProbeRK(system, controller, t_sim, dt, fixed_qDOF=fixed_qDOF, fixed_uDOF=fixed_uDOF)
@@ -251,6 +253,6 @@ if __name__ == "__main__":
 
     p2p_vis_plot(model, sol, r_OP_ref_fn)
     plt.show()
-    la_ts = compute_la_ts(controller, sol)
-    la_t_plot(model, la_ts, sol)
+    # la_ts = compute_la_ts(controller, sol)
+    # la_t_plot(model, la_ts, sol)
     # probe_plot(solver)
