@@ -382,12 +382,19 @@ class Plotter:
         self.interactor.AddObserver(vtk.vtkCommand.KeyPressEvent, cbk)
 
     def add_ground(
-        self, x0=None, x1=None, y0=None, y1=None, subdivision_x=10, subdivision_y=10
+        self,
+        x0=None,
+        x1=None,
+        y0=None,
+        y1=None,
+        z0=0,
+        subdivision_x=10,
+        subdivision_y=10,
     ):
         plane = vtk.vtkPlaneSource()
-        plane.SetOrigin(x0, y0, 0)
-        plane.SetPoint1(x1, y0, 0)
-        plane.SetPoint2(x0, y1, 0)
+        plane.SetOrigin(x0, y0, z0)
+        plane.SetPoint1(x1, y0, z0)
+        plane.SetPoint2(x0, y1, z0)
         plane.SetXResolution(subdivision_x)
         plane.SetYResolution(subdivision_y)
 

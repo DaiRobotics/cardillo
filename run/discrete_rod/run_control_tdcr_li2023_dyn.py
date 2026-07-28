@@ -26,6 +26,12 @@ Kp = 100
 G_ACCEL = 9.81
 damping_ratio = 0.01
 t_sim = 0.1
+method = "BDF"
+dt = 1e-3
+max_step = 1e-3
+rtol = 1.0e-3
+atol = 1.0e-6
+
 la_t_0 = np.array([1, 1, 1, 1], dtype=np.float64) * 0
 ret = gen_tdcr_li2023(rod_nelement=10, g_accel=G_ACCEL, statics=True)
 system_stat = ret["system"]
@@ -142,12 +148,12 @@ t, y = solve_ivp_sequence(
     y0,
     system_dyn.t0,
     t_sim,
-    dt_sequence=1e-2,
-    method="RK23",
-    max_step=1e-3,
+    dt,
+    method=method,
     step_callback=step_callback,
-    rtol=1.0e-3,
-    atol=1.0e-6,
+    rtol=rtol,
+    atol=atol,
+    max_step=max_step,
 )
 
 # t, y = runge_kutta_3_8(dydt, y0, 0, t_sim, 1e-3, step_callback=step_callback)
@@ -190,5 +196,5 @@ plt.tight_layout()
 plt.show(block=False)
 
 plotter = Plotter(system_dyn, window_size=(960, 540))
-plotter.add_ground(*[0.2, -0.2, 0.2, -0.2], 10, 10)
+plotter.add_ground(*[0.2, -0.2, 0.2, -0.2, -0.15], 10, 10)
 plotter.render_solution(Solution(system_dyn, t, q), True)

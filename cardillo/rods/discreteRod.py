@@ -325,52 +325,19 @@ class DiscreteRod:
             lambda q: DiscreteRod._eval_els(DiscreteRod._gen_element_q(q), self.L_els)
         )
 
-        q_dot_jit = jit(self._q_dot)
+        self._q_dot_jit = jit(self._q_dot_jax)
 
-        def q_dot(t, q, u):
-            return q_dot_jit(t, q, u)
+        self._q_dot_q_jit = jit(self._q_dot_q)
 
-        self.q_dot = q_dot
+        self._h_jit = jit(self._h_jax)
 
-        q_dot_q_jit = jit(self._q_dot_q)
+        self._h_u_jit = jit(self._h_u_jax)
 
-        def q_dot_q(t, q, u):
-            self._q_dot_q_coo.data = q_dot_q_jit(t, q, u)
-            return self._q_dot_q_coo
+        self._la_c_jit = jit(self._la_c_jax)
 
-        self.q_dot_q = q_dot_q
+        self._c_jit = jit(self._c_jax)
 
-        h_jit = jit(self._h)
-
-        def h(t, q, u):
-            return h_jit(t, q, u)
-
-        self.h = h
-
-        h_u_jit = jit(self._h_u)
-
-        def h_u(t, q, u):
-            self._h_u_coo.data = h_u_jit(t, q, u)
-            return self._h_u_coo
-
-        self.h_u = h_u
-
-        self.la_c = jit(self._la_c)
-
-        c_jit = jit(self._c)
-
-        def c(t, q, u, la_c):
-            return c_jit(t, q, u, la_c)
-
-        self.c = c
-
-        c_q_jit = jit(self._c_q)
-
-        def c_q(t, q, u, la_c):
-            self._c_q_coo.data = c_q_jit(t, q, u, la_c)
-            return self._c_q_coo
-
-        self.c_q = c_q
+        self._c_q_jit = jit(self._c_q_jax)
 
         if self._damping:
             c_u_jit = jit(
@@ -387,21 +354,9 @@ class DiscreteRod:
 
             self.c_u = c_u
 
-        W_c_jit = jit(self._W_c)
+        self._W_c_jit = jit(self._W_c_jax)
 
-        def W_c(t, q):
-            self._W_c_coo.data = W_c_jit(t, q)
-            return self._W_c_coo
-
-        self.W_c = W_c
-
-        Wla_c_q_jit = jit(self._Wla_c_q)
-
-        def Wla_c_q(t, q, la_c):
-            self._Wla_c_q_coo.data = Wla_c_q_jit(t, q, la_c)
-            return self._Wla_c_q_coo
-
-        self.Wla_c_q = Wla_c_q
+        self._Wla_c_q_jit = jit(self._Wla_c_q_jax)
 
     def __init_coo__(self, cross_section_inertias):
         # M
@@ -765,8 +720,11 @@ class DiscreteRod:
 
     _q_dot_nodes = jit(vmap(_q_dot_node.__func__))
 
-    def _q_dot(self, t, q, u):
+    def _q_dot_jax(self, t, q, u):
         return DiscreteRod._q_dot_nodes(q.reshape((-1, 7)), u.reshape((-1, 6))).ravel()
+
+    def q_dot(self, t, q, u):
+        return self._q_dot_jit(t, q, u)
 
     @staticmethod
     @jit
@@ -779,6 +737,10 @@ class DiscreteRod:
         return DiscreteRod._p_dot_p_nodes(
             q.reshape((-1, 7)), u.reshape((-1, 6))
         ).ravel()
+
+    def q_dot_q(self, t, q, u):
+        self._q_dot_q_coo.data = self._q_dot_q_jit(t, q, u)
+        return self._q_dot_q_coo
 
     def q_dot_u(self, t, q):
         T_SO3_inv_quat_nodes = (
@@ -811,8 +773,11 @@ class DiscreteRod:
 
     _h_nodes = jit(vmap(_h_node.__func__))
 
-    def _h(self, t, q, u):
+    def _h_jax(self, t, q, u):
         return DiscreteRod._h_nodes(u.reshape((-1, 6)), self._B_Theta_C).ravel()
+
+    def h(self, t, q, u):
+        return self._h_jit(t, q, u)
 
     @staticmethod
     @jit
@@ -821,10 +786,14 @@ class DiscreteRod:
 
     _h_u_nodes = jit(vmap(_h_u_node.__func__))
 
-    def _h_u(self, t, q, u):
+    def _h_u_jax(self, t, q, u):
         return DiscreteRod._h_u_nodes(
             u.reshape((-1, 6))[:, 3:], self._B_Theta_C
         ).ravel()
+
+    def h_u(self, t, q, u):
+        self._h_u_coo.data = self._h_u_jit(t, q, u)
+        return self._h_u_coo
 
     #####################################################
     # stabilization conditions for the kinematic equation
@@ -862,9 +831,9 @@ class DiscreteRod:
 
     _la_c_damp_els = jit(vmap(_la_c_damp_el.__func__))
 
-    def _la_c(self, t, q, u):
-        return (
-            DiscreteRod._la_c_els(
+    def _la_c_jax(self, t, q, u):
+        if not self._damping:
+            return DiscreteRod._la_c_els(
                 DiscreteRod._gen_element_q(q),
                 self.L_els,
                 self.B_gamma0,
@@ -872,8 +841,8 @@ class DiscreteRod:
                 self.K_ga_els,
                 self.K_ka_els,
             ).ravel()
-            if not self._damping
-            else DiscreteRod._la_c_damp_els(
+        else:
+            return DiscreteRod._la_c_damp_els(
                 DiscreteRod._gen_element_q(q),
                 DiscreteRod._gen_element_u(u),
                 self.L_els,
@@ -884,7 +853,9 @@ class DiscreteRod:
                 self.K_ga_damp_els,
                 self.K_ka_damp_els,
             ).ravel()
-        )
+
+    def la_c(self, t, q, u):
+        return self._la_c_jit(t, q, u)
 
     @staticmethod
     @jit
@@ -913,9 +884,9 @@ class DiscreteRod:
 
     _c_damp_els = jit(vmap(_c_damp_el.__func__))
 
-    def _c(self, t, q, u, la_c):
-        return (
-            DiscreteRod._c_els(
+    def _c_jax(self, t, q, u, la_c):
+        if not self._damping:
+            return DiscreteRod._c_els(
                 DiscreteRod._gen_element_q(q),
                 la_c.reshape((self.nelement, -1)),
                 self.L_els,
@@ -924,8 +895,8 @@ class DiscreteRod:
                 self.C_n_els,
                 self.C_m_els,
             ).ravel()
-            if not self._damping
-            else DiscreteRod._c_damp_els(
+        else:
+            return DiscreteRod._c_damp_els(
                 DiscreteRod._gen_element_q(q),
                 DiscreteRod._gen_element_u(u),
                 la_c.reshape((self.nelement, -1)),
@@ -937,7 +908,9 @@ class DiscreteRod:
                 self.C_n_damp_els,
                 self.C_m_damp_els,
             ).ravel()
-        )
+
+    def c(self, t, q, u, la_c):
+        return self._c_jit(t, q, u, la_c)
 
     def c_la_c(self):
         return self._c_la_c_coo
@@ -961,16 +934,21 @@ class DiscreteRod:
 
     _c_damp_q_els = jit(vmap(_c_damp_q_el.__func__))
 
-    def _c_q(self, t, q, u, la_c):
-        return (
-            DiscreteRod._c_q_els(DiscreteRod._gen_element_q(q), self.L_els).ravel()
-            if not self._damping
-            else DiscreteRod._c_damp_q_els(
+    def _c_q_jax(self, t, q, u, la_c):
+        if not self._damping:
+            return DiscreteRod._c_q_els(
+                DiscreteRod._gen_element_q(q), self.L_els
+            ).ravel()
+        else:
+            return DiscreteRod._c_damp_q_els(
                 DiscreteRod._gen_element_q(q),
                 DiscreteRod._gen_element_u(u),
                 self.L_els,
             ).ravel()
-        )
+
+    def c_q(self, t, q, u, la_c):
+        self._c_q_coo.data = self._c_q_jit(t, q, u, la_c)
+        return self._c_q_coo
 
     @staticmethod
     @jit
@@ -996,14 +974,19 @@ class DiscreteRod:
 
     _W_c_damp_els = jit(vmap(_W_c_damp_el.__func__))
 
-    def _W_c(self, t, q):
-        return (
-            DiscreteRod._W_c_els(DiscreteRod._gen_element_q(q), self.L_els).ravel()
-            if not self._damping
-            else DiscreteRod._W_c_damp_els(
+    def _W_c_jax(self, t, q):
+        if not self._damping:
+            return DiscreteRod._W_c_els(
                 DiscreteRod._gen_element_q(q), self.L_els
             ).ravel()
-        )
+        else:
+            return DiscreteRod._W_c_damp_els(
+                DiscreteRod._gen_element_q(q), self.L_els
+            ).ravel()
+
+    def W_c(self, t, q):
+        self._W_c_coo.data = self._W_c_jit(t, q)
+        return self._W_c_coo
 
     @staticmethod
     @jit
@@ -1035,20 +1018,23 @@ class DiscreteRod:
 
     _Wla_c_q_damp_els = jit(vmap(_Wla_c_q_damp_el.__func__))
 
-    def _Wla_c_q(self, t, q, la_c):
-        return (
-            DiscreteRod._Wla_c_q_els(
+    def _Wla_c_q_jax(self, t, q, la_c):
+        if not self._damping:
+            return DiscreteRod._Wla_c_q_els(
                 DiscreteRod._gen_element_q(q),
                 la_c.reshape((self.nelement, -1)),
                 self.L_els,
             ).ravel()
-            if not self._damping
-            else DiscreteRod._Wla_c_q_damp_els(
+        else:
+            return DiscreteRod._Wla_c_q_damp_els(
                 DiscreteRod._gen_element_q(q),
                 la_c.reshape((self.nelement, -1)),
                 self.L_els,
             ).ravel()
-        )
+
+    def Wla_c_q(self, t, q, la_c):
+        self._Wla_c_q_coo.data = self._Wla_c_q_jit(t, q, la_c)
+        return self._Wla_c_q_coo
 
     def _alpha(self, xi):
         num = self._element_number(xi)

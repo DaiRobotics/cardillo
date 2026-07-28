@@ -9,36 +9,24 @@ from cardillo.rods.discreteRod import ElementKinematics
 from cardillo.rods import DiscreteRod
 
 
-class RodTendonBasic:
-    def __init__(
-        self, rod: DiscreteRod, xis, B_r_CPs=None, name="tendon", color=(0, 200, 50)
-    ) -> None:
+class RodTendonKinematics:
+    def __init__(self, rod: DiscreteRod, xis, B_r_CPs=None) -> None:
         self.rod = rod
         self.xis = xis
         self.n_vert = len(xis)
         self.B_r_CPs = (
             np.zeros((self.n_vert, 3)) if B_r_CPs is None else np.asarray(B_r_CPs)
         )
-        self.name = name
-        self._color = color
 
-        self.alpha_vert = np.array([self.rod._alpha(xi) for xi in self.xis])
+        self._alpha_verts = np.array([self.rod._alpha(xi) for xi in self.xis])
 
-        self.r_OP_vert = jit(
-            lambda q: ElementKinematics.r_OP_batch(
-                self.alpha_vert, q.reshape((self.n_vert, -1)), self.B_r_CPs
-            )
-        )
+        self._r_OP_verts_jit = jit(self._r_OP_verts_jax)
 
-        self._W_t_jit = jit(
-            lambda q: RodTendonBasic._W_t(
-                self.alpha_vert, q.reshape((self.n_vert, -1)), self.B_r_CPs
-            )
-        )
+        self._W_t_jit = jit(self._W_t_jax)
 
-        self._Wla_t_q_jit = jit(self._Wla_t_q)
+        self._W_t_q_jit = jit(self._W_t_q_jax)
 
-        self._Wla_t_q_coo = CooMatrix((self.n_vert * 12, self.n_vert * 14))
+        self._W_t_q_coo = CooMatrix((self.n_vert * 12, self.n_vert * 14))
         for k in range(self.n_vert):
             u1, u2 = 12 * k, 12 * (k + 1)
             q1, q2 = 14 * (k - 1), 14 * (k + 2)
@@ -47,14 +35,22 @@ class RodTendonBasic:
             elif k == self.n_vert - 1:
                 q2 = 14 * self.n_vert
 
-            self._Wla_t_q_coo[u1:u2, q1:q2] = np.empty((u2 - u1, q2 - q1))
+            self._W_t_q_coo[u1:u2, q1:q2] = np.empty((u2 - u1, q2 - q1))
 
         # for visualization
         self._init_poly_data()
 
+    def _r_OP_verts_jax(self, q):
+        return ElementKinematics.r_OP_batch(
+            self._alpha_verts, q.reshape((self.n_vert, -1)), self.B_r_CPs
+        )
+
+    def _r_OP_verts(self, q):
+        return self._r_OP_verts_jit(q)
+
     @staticmethod
     @jit
-    def _W_t(alpha_vert, q_vert, B_r_CPs):
+    def _W_t_verts(alpha_vert, q_vert, B_r_CPs):
         r_OP_vert = ElementKinematics.r_OP_batch(alpha_vert, q_vert, B_r_CPs)
         J_P_vert = ElementKinematics.J_P_batch(alpha_vert, q_vert, B_r_CPs)
 
@@ -68,9 +64,17 @@ class RodTendonBasic:
 
         return jnp.einsum("ijk,ij->ik", J_P_vert, n_vert).ravel()
 
+    def _W_t_jax(self, q):
+        return RodTendonKinematics._W_t_verts(
+            self._alpha_verts, q.reshape((self.n_vert, -1)), self.B_r_CPs
+        )
+
+    def W_t(self, q):
+        return self._W_t_jit(q)
+
     @staticmethod
     @jit
-    def _W_l_q(alpha_vert, q_vert, B_r_CPs):
+    def _W_t_q(alpha_vert, q_vert, B_r_CPs):
         r_OP_vert = ElementKinematics.r_OP_batch(alpha_vert, q_vert, B_r_CPs)
         r_OP_q_vert = ElementKinematics.r_OP_q_batch(alpha_vert, q_vert, B_r_CPs)
         J_P_vert = ElementKinematics.J_P_batch(alpha_vert, q_vert, B_r_CPs)
@@ -111,17 +115,26 @@ class RodTendonBasic:
 
         J_P_n_q = jnp.einsum("ijk,ijl->ikl", J_P_vert, n_vert_q)
         J_P_q_n = jnp.einsum("ijkl,ij->ikl", J_P_q_vert, n_vert)
-        W_l_q = J_P_n_q.at[:, :, 14:28].add(J_P_q_n)
-        return W_l_q
-
-    def _Wla_t_q(self, q, la):
-        W_l_q = RodTendonBasic._W_l_q(
-            self.alpha_vert, q.reshape((self.n_vert, -1)), self.B_r_CPs
-        )
-        Wla_q = W_l_q * la
+        W_t_q = J_P_n_q.at[:, :, 14:28].add(J_P_q_n)
         return jnp.concatenate(
-            (Wla_q[0, :, 14:].ravel(), Wla_q[1:-1].ravel(), Wla_q[-1, :, :-14].ravel())
+            (W_t_q[0, :, 14:].ravel(), W_t_q[1:-1].ravel(), W_t_q[-1, :, :-14].ravel())
         )
+
+    def _W_t_q_jax(self, q):
+        return RodTendonKinematics._W_t_q(
+            self._alpha_verts, q.reshape((self.n_vert, -1)), self.B_r_CPs
+        )
+
+    def W_t_q(self, q):
+        coo = self._W_t_q_coo
+        coo.data = self._W_t_q_jit(q)
+        return coo
+
+    def assembler_callback(self):
+        rod = self.rod
+        els = np.array([rod._element_number(xi) for xi in self.xis])
+        self.qDOF = np.concatenate([rod.qDOF[rod.elDOF[el]] for el in els])
+        self.uDOF = np.concatenate([rod.uDOF[rod.elDOF_u[el]] for el in els])
 
     def _init_poly_data(self):
         self._poly_data = vtk.vtkPolyData()
@@ -139,48 +152,45 @@ class RodTendonBasic:
             vtk.VTK_LINE, self.n_vert, np.arange(self.n_vert)
         )
 
+    def _update_poly_data(self, sol_i):
+        q = sol_i.q[self.qDOF]
+        self._points[:] = self._r_OP_verts(q)
+        self._poly_data.Modified()
+
     def export(self, sol_i, **kwargs):
         self._update_poly_data(sol_i)
         return self._poly_data
 
 
-class RodTendonForce(RodTendonBasic):
+class RodTendonForce(RodTendonKinematics):
     def __init__(
         self, rod: DiscreteRod, xis, B_r_CPs=None, name="tendon", color=(0, 200, 50)
     ) -> None:
-        super().__init__(rod, xis, B_r_CPs, name, color)
+        self.name = name
+        self._color = color
+        super().__init__(rod, xis, B_r_CPs)
+
         self.nla_tau = 1
 
-        def W_tau(t, q):
-            return self._W_t_jit(q)
+    def W_tau(self, t, q):
+        return self.W_t(q)
 
-        self.W_tau = W_tau
+    def Wla_tau_q(self, t, q, u):
+        W_t_q = self.W_t_q(q)
+        coo = CooMatrix(W_t_q.shape)
+        coo.col = W_t_q.col
+        coo.row = W_t_q.row
+        coo.data = W_t_q.data * self.la_tau(t, q, u)
+        return coo
 
-        def Wla_tau_q(t, q, u):
-            coo = self._Wla_t_q_coo
-            coo.data = self._Wla_t_q_jit(q, self.la_tau(t, q, u))
-            return coo
-
-        self.Wla_tau_q = Wla_tau_q
-
-        self.Wla_tau_u = lambda t, q, u: None
-
-    def assembler_callback(self):
-        rod = self.rod
-        els = np.array([rod._element_number(xi) for xi in self.xis])
-        self.qDOF = np.concatenate([rod.qDOF[rod.elDOF[el]] for el in els])
-        self.uDOF = np.concatenate([rod.uDOF[rod.elDOF_u[el]] for el in els])
+    def Wla_tau_u(self, t, q, u):
+        return None
 
     def la_tau(self, t, q, u):
         return 0.0
 
-    def _update_poly_data(self, sol_i):
-        q = sol_i.q[self.qDOF]
-        self._points[:] = self.r_OP_vert(q)
-        self._poly_data.Modified()
 
-
-class RodTendonForceIntegrator(RodTendonBasic):
+class RodTendonForceIntegrator(RodTendonKinematics):
     def __init__(
         self, rod: DiscreteRod, xis, B_r_CPs=None, name="tendon", color=(0, 200, 50)
     ) -> None:
@@ -190,13 +200,13 @@ class RodTendonForceIntegrator(RodTendonBasic):
         self.q0 = np.zeros(1)
 
         def W_tau(t, q):
-            return self._W_t_jit(q[:-1])
+            return self.W_t(q[:-1])
 
         self.W_tau = W_tau
 
         def Wla_tau_q(t, q, u):
-            coo = self._Wla_t_q_coo
-            coo.data = self._Wla_t_q_jit(q[:-1], self.la_tau(t, q, u))
+            coo = self.W_t_q_coo
+            coo.data = self.W_t_q_jit(q[:-1], self.la_tau(t, q, u))
             return coo
 
         self.Wla_tau_q = Wla_tau_q
@@ -216,8 +226,3 @@ class RodTendonForceIntegrator(RodTendonBasic):
 
     def la_tau(self, t, q, u):
         return q[-1]
-
-    def _update_poly_data(self, sol_i):
-        q = sol_i.q[self.qDOF]
-        self._points[:] = self.r_OP_vert(q[:-1])
-        self._poly_data.Modified()

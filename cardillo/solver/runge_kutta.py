@@ -63,61 +63,79 @@ def solve_ivp_sequence(
     y0,
     t0,
     tf,
-    dt_sequence=1e-2,
-    method="RK45",
-    max_step=1e-3,
-    rtol=1.0e-8,
-    atol=1.0e-10,
+    dt,
+    method="BDF",
     step_callback=lambda t, y: None,
-    ivp_callback=lambda t, y: None,
+    dt_sequence=None,
+    sequence_callback=lambda t, y: None,
     verbose=True,
+    rtol=1.0e-3,
+    atol=1.0e-6,
+    **kwargs,
 ):
     results = {"t": [], "y": [], "event_times": []}
-    t_current = t0
-    y_current = y0
 
     def _step_callback(t, y):
         step_callback(t, y)
         return 1
 
+    dt_sequence = tf - t0 if dt_sequence is None else dt_sequence
+    assert dt_sequence <= (
+        tf - t0
+    ), f"dt_sequence {dt_sequence} must be less than or equal to the total time interval ({t0}, {tf})."
+
     if verbose:
-        pbar = tqdm(
-            total=int((tf - t0) / dt_sequence), desc=f"Method {method}", unit="event"
-        )
-    i = 0
-    while t_current < tf:
-        t_end = min(t0 + (i + 1) * dt_sequence, tf)
-        t_eval = np.arange(t_current, t_end + max_step / 2, max_step)
-        t_eval[-1] = t_end  # Ensure the last time point is exactly t_end
+        pbar = tqdm(total=100, desc=f"IVP {method}", unit="pct")
+        dydt.pbar_i = 0
+        dydt.pbar_dt = (tf - t0) / 100
+
+        def _dydt(t, y):
+            i = int(np.floor((t - t0 + dydt.pbar_dt / 2) / dydt.pbar_dt))
+            pbar.update(i - dydt.pbar_i)
+            pbar.set_description(f"IVP {method}: {t:0.2e} s < {tf:0.2e} s")
+            dydt.pbar_i = i
+            return dydt(t, y)
+
+    else:
+        _dydt = dydt
+    t_current = t0
+    y_current = y0
+    for i_seq in range(int(np.ceil((tf - t0) / dt_sequence))):
+        t_end = min(t0 + (i_seq + 1) * dt_sequence, tf)
+        t_eval = np.arange(t_current, t_end, dt)
+        t_eval[-1] = min(
+            t_eval[-1], t_end
+        )  # Ensure the last time point does not exceed t_end
         sol = solve_ivp(
-            dydt,
+            _dydt,
             (t_current, t_end),
             y_current,
             t_eval=t_eval,
             method=method,
             dense_output=False,
             events=[_step_callback],
-            max_step=max_step,
             rtol=rtol,
             atol=atol,
+            **kwargs,
         )
+        assert sol.success, f"{method} solver failed: {sol.message}"
         t = sol.t
         y = sol.y.T
-        # save results
-        results["t"].extend(t[:-1])
-        results["y"].extend(y[:-1])
 
         t_current = t[-1]
         y_current = y[-1]
 
-        ivp_callback(t_current, y_current)
-        if verbose:
-            pbar.update(1)
+        sequence_callback(t_current, y_current)
 
-        i += 1
-        if t_current >= tf:
-            results["t"].extend([t_current])
-            results["y"].extend([y_current])
-            break
+        # extend results
+        if i_seq == 0:
+            results["t"].extend(t)
+            results["y"].extend(y)
+        elif t[0] == results["t"][-1]:
+            results["t"].extend(t[1:])
+            results["y"].extend(y[1:])
+
+    if verbose:
+        pbar.close()
 
     return np.array(results["t"]), np.array(results["y"])

@@ -20,7 +20,7 @@ def gen_tdcr_li2023(rod_nelement=10, g_accel=9.81, damping_ratio=0, statics=True
     rod_r_base = 14e-3  # [m] radius at bottom of rod
     rod_r_tip = 8.5e-3  # [m] radius at tip of rod
     rod_density = 1.41e3  # density of material
-    rod_r_OC0 = np.array([0, 0, 0.2], dtype=np.float64)
+    rod_r_OC0 = np.array([0, 0, 0], dtype=np.float64)
     rod_A_IB0 = np.eye(3, dtype=np.float64)
     E, G = 2.563e5, 8.543e4
 
