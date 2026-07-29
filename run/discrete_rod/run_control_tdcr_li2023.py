@@ -2,123 +2,120 @@ import numpy as np
 import scipy
 from matplotlib import pyplot as plt
 
-from cardillo import system
 from cardillo.utility.jax_cache_config import configure_cache
 
 configure_cache("run_tdcr_li2023")
 
-from cardillo.math.fsolve import fsolve
 from cardillo.solver import Newton, ScipyDAE, Solution
-from cardillo.solver.runge_kutta import (
-    runge_kutta_3_8,
-    runge_kutta_4,
-    solve_ivp_sequence,
-)
-from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.visualization import Plotter
 
 from cardillo_example_systems.tdcr_li2023 import gen_tdcr_li2023
 
-##############
-# Setup system
-##############
-Kp = 1
+############
+# parameters
+############
 G_ACCEL = 9.81
-damping_ratio = 0.01
-t_sim = 10
-method = "BDF"
+rod_nelement = 24
+damping_ratio = 5e-2
+la_t_0 = np.array([0.5, 0, 0, 0], dtype=np.float64)
+# static solver
+n_load_steps = 4
+# dynamic solver
 dt = 1e-3
-dt_sequence = 1e-1
-max_step = 1e-1
+t_sim = 25
 rtol = 1.0e-3
 atol = 1.0e-6
+# controller
+Kp = 2
+t_traj_hold = 5
+dt_jacobian = 1e-2
+#
+n = t_sim / dt_jacobian
+assert (
+    abs(n - round(n)) < 1e-8
+), f"t_sim ({t_sim} s) must be a multiple of dt_jacobian ({dt_jacobian} s)"
 
-la_t_0 = np.array([0, 0, 0, 0], dtype=np.float64)
-ret = gen_tdcr_li2023(rod_nelement=10, g_accel=G_ACCEL, statics=True)
+
+##############
+# load systems
+##############
+# statics
+ret = gen_tdcr_li2023(rod_nelement=rod_nelement, g_accel=G_ACCEL, statics=True)
 system_stat = ret["system"]
 tendons_stat = ret["tendons"]
+rod_gravity_stat = ret["rod_gravity"]
+
+# dynamics
+ret = gen_tdcr_li2023(
+    rod_nelement=rod_nelement,
+    g_accel=G_ACCEL,
+    damping_ratio=damping_ratio,
+    statics=False,
+    controller=True,
+)
+system_dyn = ret["system"]
+rod_dyn = ret["rod"]
+controller_dyn = ret["controller"]
+
+nla_tau = system_dyn.nla_tau
+
+
+###################
+# initial condition
+###################
 for td, la in zip(tendons_stat, la_t_0):
     td.la_tau = lambda t, q, u, la=la: t * la
 
-ret = gen_tdcr_li2023(
-    rod_nelement=10, g_accel=G_ACCEL, damping_ratio=damping_ratio, statics=False
-)
-system_dyn = ret["system"]
-tendons_dyn = ret["tendons"]
-rod_dyn = ret["rod"]
-##################
-# desired position
-##################
-points = [
-    
-]
-def r_OP_traj(t):
-    return np.array([0.1 * t, 0.1 * t, 0.1 * t], dtype=np.float64)
-
-###############
-# static solver
-###############
 newton = Newton(
     system_stat,
-    n_load_steps=4,
+    n_load_steps=n_load_steps,
     verbose=True,
 )
+sol0_stat = newton.solve()
 
-sol_stat = newton.solve()
-
-#######################
-# static initial states
-#######################
-x0 = newton.x[-1]
-q0_stat = sol_stat.q[-1]
-
-q0_dyn = np.concatenate((q0_stat, la_t_0))
-u0 = np.zeros_like(sol_stat.u[-1])
-system_dyn.set_new_initial_state(q0_dyn, u0)
-
-#################
-# ScipyDAE solver
-#################
-# scipy_dae = ScipyDAE(dyn_system, t1=1, dt=1e-2)
-
-# sol_dyn = scipy_dae.solve()
-
-####################
-# Runge Kutta solver
-####################
-nq = system_dyn.nq
-nu = system_dyn.nu
-n_tau = system_dyn.nla_tau
-# q0_dyn, u0 = system_dyn.q0, system_dyn.u0
-y0 = np.concatenate((q0_dyn, u0))
-M_inv = scipy.sparse.linalg.inv(system_dyn.M(0, q0_dyn).tocsc()).tocsr()
-x = newton.x[-1]
-f = newton.fun(x, 1)
+q0_dyn = np.concatenate((sol0_stat.q[-1], la_t_0))
+u0_dyn = sol0_stat.u[-1]
+system_dyn.set_new_initial_state(q0_dyn, u0_dyn)
 
 
-def compute_dr_OP_dla_t(t, y):
-    global x, f, dr_OP_dla_t_inv
+############
+# controller
+############
+# fmt: off
+points = np.array([
+    [15.438,  4.335,  3.399],    # A
+    [15.272, -5.114, -0.463],    # B
+    [10.888,  9.106, -5.492],    # C
+    [14.615, -4.486, -6.375],    # D
+    [13.951,  0.   , -9.842],    # E
+    ], dtype=np.float64) * 1e-2
+# fmt: on
+
+
+def r_OP_traj(t):
+    n = int(np.floor(t / t_traj_hold))
+    n = min(n, len(points) - 1)
+    return points[n]
+
+
+def compute_dr_OP_dla_t(t, q):
     t = float(t)
-    # static solver
-    la_t = y[nq : nq + n_tau]
+
+    # interpolation of la_tau for the static solver
+    la_t = q[-nla_tau:]
     for td, la in zip(tendons_stat, la_t):
-        td.la_tau = lambda t, q, u, la=la: la
-    sol = fsolve(
-        newton.fun,
-        x,
-        f0=f,
-        jac=newton.jac,
-        fun_args=(1,),
-        jac_args=(1,),
-        options=newton.options,
-    )
+        td.la_tau = lambda t, q, u, la1=td.la_tau(1, None, None), la2=la: la1 + t * (
+            la2 - la1
+        )
+    # static soluton with warm start from the previous solution
+    sol = newton.solve(x0=newton.x[-1])
     assert sol.success, f"Static solver failed to converge: {la_t}"
-    x = sol.x
-    q_stat = x[: system_stat.nq]
-    f = newton.fun(x, 1)
-    df_dx = newton.jac(x, 1)
+
+    # compute jacobian for the controller
+    q = sol.q[-1, : system_stat.nq]
+    df_dx = newton.jac(newton.x[-1], 1)
     df_dla_t = np.zeros((newton.nx, system_stat.nla_tau), dtype=np.float64)
-    df_dla_t[: system_stat.nu] = system_stat.W_tau(t, q_stat, format="Coo").toarray(
+    df_dla_t[: system_stat.nu] = system_stat.W_tau(t, q, format="Coo").toarray(
         fix_size=True
     )
     dx_dla_t = scipy.sparse.linalg.spsolve(df_dx, -df_dla_t)
@@ -129,81 +126,47 @@ def compute_dr_OP_dla_t(t, y):
     return dr_OP_dla_t_inv
 
 
-W_tau_coo = CooMatrix((nu, n_tau), manual_sync=True)
-W_c_coo = CooMatrix((nu, system_dyn.nla_c), manual_sync=True)
+def wrap_step_callback(step_callback):
+    system_dyn.t_jac_last = -np.inf
+
+    def _step_callback(t, q, u):
+        q, u = step_callback(t, q, u)
+        # update jacobian every dt_jacobian_update seconds
+        if t - system_dyn.t_jac_last >= dt_jacobian:
+            controller_dyn.dr_OP_dla_t_inv = compute_dr_OP_dla_t(t, q)
+            system_dyn.t_jac_last = t
+        return q, u
+
+    return _step_callback
 
 
-def ydot(t, y):
-    global dr_OP_dla_t_inv
-    global W_tau_coo, W_c_coo
-    t = float(t)
-    q, u = y[:nq], y[-nu:]
-    la_tau = y[nq:-nu]
-    h = system_dyn.h(t, q, u)
-    W_c_coo = system_dyn.W_c(t, q, format="Coo", coo=W_c_coo)
-    la_c = system_dyn.la_c(t, q, u)
-    W_tau_coo = system_dyn.W_tau(t, q, format="Coo", coo=W_tau_coo)
+# full gravity
+rod_gravity_stat.force = lambda t, xi, f=rod_gravity_stat.force: f(1, xi)
 
-    # control input
-    r_OP = q[-7:-4]
-    r_OP_des = r_OP_traj(t)
-    la_t_dot = dr_OP_dla_t_inv @ (r_OP_des - r_OP) * Kp
+# disable output for the dynamical simulation
+newton.verbose = False
 
-    # update u_dot
-    W_c_coo.manual_sync()
-    W_c = W_c_coo.tocsr(fix_size=True)
-    W_tau_coo.manual_sync()
-    W_tau = W_tau_coo.tocsr(fix_size=True)
-    u_dot = M_inv @ (h + W_c @ la_c + W_tau @ la_tau)
-
-    ydot = np.concatenate((system_dyn.q_dot(t, q, u), la_t_dot, u_dot))
-    # fix the first node
-    ydot[:7] = 0.0
-    ydot[-nu : -nu + 6] = 0.0
-    return ydot
+controller_dyn.Kp = Kp
+controller_dyn.r_OP_traj = r_OP_traj
 
 
-dr_OP_dla_t_inv = compute_dr_OP_dla_t(0, q0_dyn)
+######################
+# dynamical simulation
+######################
+# set step callback to update the jacobian for the controller
+system_dyn.step_callback = wrap_step_callback(system_dyn.step_callback)
 
+solver = ScipyDAE(system_dyn, t1=t_sim, dt=dt, method="Radau", atol=atol, rtol=rtol)
+sol = solver.solve()
 
-def step_callback(t, y):
-    t = float(t)
-    q, u = y[:nq], y[nq:]
-    system_dyn.step_callback(t, q, u)
-
-
-t, y = solve_ivp_sequence(
-    ydot,
-    y0,
-    system_dyn.t0,
-    t_sim,
-    dt,
-    method=method,
-    step_callback=step_callback,
-    dt_sequence=dt_sequence,
-    sequence_callback=compute_dr_OP_dla_t,
-    rtol=rtol,
-    atol=atol,
-    max_step=max_step,
-)
-
-# def step_callback(t, y):
-#     t = float(t)
-#     q, u = y[:nq], y[nq:]
-#     system_dyn.step_callback(t, q, u)
-
-#     # update jacobian dr_OP_dla_t
-#     compute_dr_OP_dla_t(t, y)
-
-
-# t, y = runge_kutta_3_8(dydt, y0, 0, t_sim, 1e-3, step_callback=step_callback)
 
 ###############
 # visualization
 ###############
-q = y[:, :nq]
-la_t = y[:, nq:-nu]
-r_OP = q[:, rod_dyn.qDOF].reshape((-1, rod_dyn.nnode, 7))[:, -1, :3]
+t, q = sol.t, sol.q
+la_t = q[:, -nla_tau:]
+r_OP = q[:, rod_dyn.qDOF][:, -7:-4]
+r_OP_ref = np.array([r_OP_traj(ti) for ti in t], dtype=np.float64)
 fig = plt.figure(figsize=(12, 12))
 gs = fig.add_gridspec(4, 2)
 
@@ -212,6 +175,9 @@ ax1 = fig.add_subplot(gs[0, 0])
 ax2 = fig.add_subplot(gs[1, 0], sharex=ax1)
 ax3 = fig.add_subplot(gs[2, 0], sharex=ax1)
 
+ax1.plot(t, r_OP_ref[:, 0], "-r", label="x_ref")
+ax2.plot(t, r_OP_ref[:, 1], "-r", label="y_ref")
+ax3.plot(t, r_OP_ref[:, 2], "-r", label="z_ref")
 ax1.plot(t, r_OP[:, 0], label="x")
 ax2.plot(t, r_OP[:, 1], label="y")
 ax3.plot(t, r_OP[:, 2], label="z")
@@ -236,4 +202,4 @@ plt.show(block=False)
 
 plotter = Plotter(system_dyn, window_size=(960, 540))
 plotter.add_ground(*[0.2, -0.2, 0.2, -0.2, -0.15], 10, 10)
-plotter.render_solution(Solution(system_dyn, t, q), True)
+plotter.render_solution(Solution(system_dyn, t, q), True, play_speed_up=2)

@@ -12,7 +12,7 @@ from cardillo.solver import Newton, ScipyDAE, Solution
 from cardillo.solver.runge_kutta import (
     runge_kutta_3_8,
     runge_kutta_4,
-    solve_ivp_sequence,
+    solve_ivp,
 )
 from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.visualization import Plotter
@@ -143,7 +143,7 @@ def step_callback(t, y):
     system_dyn.step_callback(t, q, u)
 
 
-t, y = solve_ivp_sequence(
+t, y = solve_ivp(
     dydt,
     y0,
     system_dyn.t0,

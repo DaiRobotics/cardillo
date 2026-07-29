@@ -1,6 +1,6 @@
 import numpy as np
 from tqdm import tqdm
-from scipy.integrate import solve_ivp
+from scipy.integrate import solve_ivp as _solve_ivp
 
 
 def runge_kutta_4(dydt, y0, t0, tf, h, step_callback=lambda t, y: None, verbose=True):
@@ -58,7 +58,7 @@ def runge_kutta_3_8(dydt, y0, t0, tf, h, step_callback=lambda t, y: None, verbos
     return t, y
 
 
-def solve_ivp_sequence(
+def solve_ivp(
     dydt,
     y0,
     t0,
@@ -66,23 +66,15 @@ def solve_ivp_sequence(
     dt,
     method="BDF",
     step_callback=lambda t, y: None,
-    dt_sequence=None,
-    sequence_callback=lambda t, y: None,
     verbose=True,
     rtol=1.0e-3,
     atol=1.0e-6,
     **kwargs,
 ):
-    results = {"t": [], "y": [], "event_times": []}
 
-    def _step_callback(t, y):
+    def _event(t, y):
         step_callback(t, y)
         return 1
-
-    dt_sequence = tf - t0 if dt_sequence is None else dt_sequence
-    assert dt_sequence <= (
-        tf - t0
-    ), f"dt_sequence {dt_sequence} must be less than or equal to the total time interval ({t0}, {tf})."
 
     if verbose:
         pbar = tqdm(total=100, desc=f"IVP {method}", unit="pct")
@@ -98,44 +90,22 @@ def solve_ivp_sequence(
 
     else:
         _dydt = dydt
-    t_current = t0
-    y_current = y0
-    for i_seq in range(int(np.ceil((tf - t0) / dt_sequence))):
-        t_end = min(t0 + (i_seq + 1) * dt_sequence, tf)
-        t_eval = np.arange(t_current, t_end, dt)
-        t_eval[-1] = min(
-            t_eval[-1], t_end
-        )  # Ensure the last time point does not exceed t_end
-        sol = solve_ivp(
-            _dydt,
-            (t_current, t_end),
-            y_current,
-            t_eval=t_eval,
-            method=method,
-            dense_output=False,
-            events=[_step_callback],
-            rtol=rtol,
-            atol=atol,
-            **kwargs,
-        )
-        assert sol.success, f"{method} solver failed: {sol.message}"
-        t = sol.t
-        y = sol.y.T
-
-        t_current = t[-1]
-        y_current = y[-1]
-
-        sequence_callback(t_current, y_current)
-
-        # extend results
-        if i_seq == 0:
-            results["t"].extend(t)
-            results["y"].extend(y)
-        elif t[0] == results["t"][-1]:
-            results["t"].extend(t[1:])
-            results["y"].extend(y[1:])
-
+    t_eval = np.arange(t0, tf, dt)
+    t_eval[-1] = min(t_eval[-1], tf)  # Ensure the last time point does not exceed t_end
+    sol = _solve_ivp(
+        _dydt,
+        (t0, tf),
+        y0,
+        t_eval=t_eval,
+        method=method,
+        dense_output=False,
+        events=[_event],
+        rtol=rtol,
+        atol=atol,
+        **kwargs,
+    )
+    assert sol.success, f"{method} solver failed: {sol.message}"
     if verbose:
         pbar.close()
 
-    return np.array(results["t"]), np.array(results["y"])
+    return sol.t, sol.y.T

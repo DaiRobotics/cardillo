@@ -420,7 +420,8 @@ class System:
         if format == "dense" and coo is None:
             h = np.zeros(self.nu, dtype=float)
             for contr in self.__h_contr:
-                np.add.at(h, contr.uDOF, contr.h(t, q[contr.qDOF], u[contr.uDOF]))
+                h[contr.uDOF] += contr.h(t, q[contr.qDOF], u[contr.uDOF])
+                # np.add.at(h, contr.uDOF, contr.h(t, q[contr.qDOF], u[contr.uDOF]))
                 # maybe faster to sum up contributions for the same uDOF first and then add to h
                 # uDOF, inv = np.unique(contr.uDOF, return_inverse=True)
                 # sums = np.bincount(inv, weights=contr.h(t, q[contr.qDOF], u[contr.uDOF]))

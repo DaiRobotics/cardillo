@@ -7,4 +7,4 @@ from ._cross_section import (
 from ._material_models import *
 from ._animate import animate_beam
 from .discreteRod import DiscreteRod
-from .tendon import RodTendonForce, RodTendonForceIntegrator
+from .tendon import RodTendonKinematics, RodTendonForce, RodTendonForceIntegrator

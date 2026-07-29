@@ -209,10 +209,13 @@ class Newton:
             f" error {error:.4e}"
         )
 
-    def solve(self):
+    def solve(self, x0=None):
         pbar = range(0, self.nt)
         if self.verbose:
             pbar = tqdm(pbar, leave=True)
+        # manually set initial guess for first load step if provided
+        if x0 is not None:
+            self.x[0] = x0
         for i in pbar:
             sol = fsolve(
                 self.fun,
@@ -242,6 +245,7 @@ class Newton:
                     la_g=self.x[: i + 1, self.split_x[0] : self.split_x[1]],
                     la_c=self.x[: i + 1, self.split_x[1] : self.split_x[2]],
                     la_N=self.x[: i + 1, self.split_x[2] :],
+                    success=False,
                 )
 
             # solver step callback
@@ -265,6 +269,7 @@ class Newton:
             la_g=x[: i + 1, self.split_x[0] : self.split_x[1]],
             la_c=x[: i + 1, self.split_x[1] : self.split_x[2]],
             la_N=x[: i + 1, self.split_x[2] :],
+            success=True,
         )
 
 

@@ -5,7 +5,7 @@ from time import perf_counter, sleep
 import vtk
 from vtk.util.numpy_support import numpy_to_vtk
 
-from cardillo.rods import RodTendonForce, DiscreteRod
+from cardillo.rods import RodTendonKinematics, DiscreteRod
 from cardillo.rods._base import CosseratRod_PetrovGalerkin
 from cardillo.solver.solution import Solution
 
@@ -333,7 +333,7 @@ class Plotter:
         for contr in system.contributions:
             if isinstance(contr, DiscreteRod):
                 Twin = VisualDiscreteRod
-            elif isinstance(contr, RodTendonForce):
+            elif isinstance(contr, RodTendonKinematics):
                 Twin = VisualTendon
             else:
                 Twin = None

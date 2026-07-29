@@ -84,8 +84,8 @@ class ScipyDAE:
         self.t_eval = np.arange(t0, self.t1 + self.dt, self.dt)
 
         self.frac = (t1 - t0) / 100
-        self.pbar = tqdm(total=100, leave=True)
-        self.i = 0
+        self.pbar = tqdm(total=100, unit="pct")
+        self.pbar_i = 0
 
         # data allocation
         self.F = CooArray(self.ny, manual_sync=True)
@@ -137,10 +137,10 @@ class ScipyDAE:
     def fun(self, t, y, yp):
         t = float(t)
         # update progress bar
-        i1 = int(t // self.frac)
-        self.pbar.update(i1 - self.i)
-        self.pbar.set_description(f"t: {t:0.2e}s < {self.t1:0.2e}s", refresh=False)
-        self.i = i1
+        pbar_i = int(np.floor((t + self.frac / 2) / self.frac))
+        self.pbar.update(pbar_i - self.pbar_i)
+        self.pbar.set_description(f"{self.method}: t {t:0.2e}s < {self.t1:0.2e}s")
+        self.pbar_i = pbar_i
 
         # unpack vectors
         s1, s2, s3, s4, s5 = self.split
@@ -364,7 +364,7 @@ class ScipyDAE:
         # return Jy_num, Jyp_num
 
     def solve(self):
-        solver_summary = SolverSummary(f"Scipy solve_dae with method '{self.method}'")
+        # solver_summary = SolverSummary(f"Scipy solve_dae with method '{self.method}'")
         sol = solve_dae(
             self.fun,
             self.t_eval[[0, -1]],
@@ -378,10 +378,8 @@ class ScipyDAE:
             jac=self.jac,
             **self.kwargs,
         )
-        self.pbar.update(100 - self.i)
-        self.pbar.set_description(f"t: {self.t1:0.2e}s < {self.t1:0.2e}s", refresh=True)
         self.pbar.close()
-        solver_summary.print()
+        # solver_summary.print()
 
         # unpack solution
         t = sol.t
@@ -399,7 +397,7 @@ class ScipyDAE:
             la_g=la_g.T,
             la_gamma=la_gamma.T,
             la_c=la_c.T,
-            solver_summary=solver_summary,
+            # solver_summary=solver_summary,
             nfev=sol.nfev,
             njev=sol.njev,
             nlu=sol.nlu,

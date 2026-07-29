@@ -10,13 +10,14 @@ from cardillo.rods import DiscreteRod
 
 
 class RodTendonKinematics:
-    def __init__(self, rod: DiscreteRod, xis, B_r_CPs=None) -> None:
+    def __init__(self, rod: DiscreteRod, xis, B_r_CPs=None, color=(0, 200, 50)) -> None:
         self.rod = rod
         self.xis = xis
         self.n_vert = len(xis)
         self.B_r_CPs = (
             np.zeros((self.n_vert, 3)) if B_r_CPs is None else np.asarray(B_r_CPs)
         )
+        self._color = color
 
         self._alpha_verts = np.array([self.rod._alpha(xi) for xi in self.xis])
 
@@ -167,8 +168,7 @@ class RodTendonForce(RodTendonKinematics):
         self, rod: DiscreteRod, xis, B_r_CPs=None, name="tendon", color=(0, 200, 50)
     ) -> None:
         self.name = name
-        self._color = color
-        super().__init__(rod, xis, B_r_CPs)
+        super().__init__(rod, xis, B_r_CPs, color)
 
         self.nla_tau = 1
 
@@ -194,6 +194,7 @@ class RodTendonForceIntegrator(RodTendonKinematics):
     def __init__(
         self, rod: DiscreteRod, xis, B_r_CPs=None, name="tendon", color=(0, 200, 50)
     ) -> None:
+        raise NotImplementedError
         super().__init__(rod, xis, B_r_CPs, name, color)
         self.nla_tau = 1
         self.nq = 1
