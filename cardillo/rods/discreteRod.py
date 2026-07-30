@@ -18,6 +18,7 @@ from cardillo import math_jax as mj
 from cardillo.math import A_IB_basic
 from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.utility.check_time_derivatives import check_time_derivatives
+from cardillo.visualization.vtk_render2 import RuntimeVisualBase
 
 from ._cross_section import CrossSectionInertias, CircularCrossSection
 
@@ -214,7 +215,153 @@ class ElementKinematics(ABC):
     B_Psi_u = jnp.zeros((3, 12))
 
 
-class DiscreteRod:
+class DiscreteRodExport(RuntimeVisualBase):
+    def __init__(
+        self,
+        nelement,
+        xi_node,
+        cross_section,
+        subdivision=4,
+        color=(82, 108, 164),
+        opacity=1,
+    ):
+        self._color = color
+        self._opacity = opacity
+        self._subdivision = subdivision
+        self._init_ugrid(nelement, xi_node, cross_section, color)
+
+    def _init_ugrid(self, nelement, xi_node, cross_section, color):
+        if isinstance(cross_section, CircularCrossSection):
+            weights = [
+                1.0,
+                1.0,
+                1.0,
+                0.5,
+                0.5,
+                0.5,
+            ]
+            degrees = [2, 2, 1]
+            ctype = vtk.VTK_BEZIER_WEDGE
+        # elif isinstance(rod.cross_section, RectangularCrossSection):
+        #     npts = 16
+        #     weights = [1] * 16
+        #     degrees = [1, 1, 3]
+        #     ctype = vtk.VTK_BEZIER_HEXAHEDRON
+        else:
+            raise NotImplementedError
+
+        self._ugrid = vtk.vtkUnstructuredGrid()
+
+        # points
+        self._body_points = np.empty((6 * (nelement + 1), 3), dtype=float)
+        array = numpy_to_vtk(self._body_points, deep=False)
+        vtk_points = vtk.vtkPoints()
+        vtk_points.SetData(array)
+        self._ugrid.SetPoints(vtk_points)
+
+        # cells
+        self._ugrid.Allocate(nelement)
+        for i in range(nelement):
+            self._ugrid.InsertNextCell(
+                ctype,
+                12,
+                list(range(i * 6, i * 6 + 3))
+                + list(range((i + 1) * 6, (i + 1) * 6 + 3))
+                + list(range(i * 6 + 3, (i + 1) * 6))
+                + list(range((i + 1) * 6 + 3, (i + 2) * 6)),
+            )
+
+        # point data: RationalWeights
+        pdata = self._ugrid.GetPointData()
+        array = numpy_to_vtk(np.tile(weights, nelement + 1))
+        pdata.SetRationalWeights(array)
+
+        # cell data: HigherOrderDegrees
+        cdata = self._ugrid.GetCellData()
+        array = numpy_to_vtk(np.repeat([degrees], nelement, axis=0))
+        cdata.SetHigherOrderDegrees(array)
+
+        # cell data: Colors
+        array = numpy_to_vtk(np.repeat([color], nelement, axis=0))
+        array.SetName("Colors")
+        cdata.AddArray(array)
+
+        # cell data: Strains
+        self._strain = np.zeros((nelement, 6), dtype=float)
+        array = numpy_to_vtk(self._strain, deep=False)
+        array.SetName("Strains")
+        array.SetComponentName(0, "B_gamma_x")
+        array.SetComponentName(1, "B_gamma_y")
+        array.SetComponentName(2, "B_gamma_z")
+        array.SetComponentName(3, "B_kappa_x")
+        array.SetComponentName(4, "B_kappa_y")
+        array.SetComponentName(5, "B_kappa_z")
+        cdata.AddArray(array)
+
+        # control points on circle
+        phis = np.linspace(0.0, 2.0 * np.pi, 3, endpoint=False)
+        phis2 = phis + (np.pi / 3.0)
+        points = []
+        for n in range(nelement + 1):
+            if cross_section._variable:
+                radius = cross_section.radius(
+                    xi_node[n]
+                )  # Assuming a simple case, adjust as needed
+            else:
+                radius = cross_section.radius
+            # on circle
+            xys1 = (
+                np.stack([np.zeros_like(phis), np.cos(phis), np.sin(phis)], axis=1)
+                * radius
+            )
+            # out of circle
+            xys2 = np.stack(
+                [np.zeros_like(phis2), np.cos(phis2), np.sin(phis2)], axis=1
+            ) * (2.0 * radius)
+            points.append(np.concatenate([xys1, xys2], axis=0).T)
+        self._ctrl_pts_bezier_circle = np.array(points)
+
+    def _update_ugrid(self, sol_i, strain=False):
+        q_rod = sol_i.q[self.qDOF]
+        q_nodes = self._view_nodal_q(q_rod)
+        r_OC_nodes = q_nodes[:, :3]
+        A_IB_nodes = mj.Exp_SO3_quat_batch(q_nodes[:, 3:]).__array__()
+        points = r_OC_nodes[:, None] + (
+            A_IB_nodes @ self._ctrl_pts_bezier_circle
+        ).swapaxes(1, 2)
+        self._body_points[:] = points.reshape((-1, 3))
+        self._ugrid.Modified()
+
+        # set strain data
+        if strain:
+            _, B_gamma, B_kappa = self._eval(q_rod)
+            self._strain[:, :3] = B_gamma
+            self._strain[:, 3:] = B_kappa
+
+    def export(self, sol_i, **kwargs):
+        self._update_ugrid(sol_i, strain=True)
+        return self._ugrid
+
+    def to_vtk_actors(self):
+        filter = vtk.vtkDataSetSurfaceFilter()
+        filter.SetInputData(self._ugrid)
+        filter.SetNonlinearSubdivisionLevel(self._subdivision)
+
+        mapper = vtk.vtkDataSetMapper()
+        mapper.SetInputConnection(filter.GetOutputPort())
+
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetColor([c / 255 for c in self._color])
+        actor.GetProperty().SetOpacity(self._opacity)
+
+        return [actor]
+
+    def update_vtk_actors(self, sol_i):
+        self._update_ugrid(sol_i, strain=False)
+
+
+class DiscreteRod(DiscreteRodExport):
     def __init__(
         self,
         cross_section,
@@ -227,7 +374,7 @@ class DiscreteRod:
         cross_section_inertias=CrossSectionInertias(),
         name="discrete_rod",
         damping_ratio=0,
-        color=(82, 108, 164)
+        **kwargs
     ):
         self._jaxed = True
         self.cross_section = cross_section
@@ -237,10 +384,11 @@ class DiscreteRod:
         self.name = name
         self._damp_ratio = damping_ratio
         self._damping = damping_ratio > 0
-        self._color = color
 
         # centerline parameter of nodes
         self.xi_node = np.linspace(0, 1, self.nnode)
+
+        super().__init__(nelement, self.xi_node, cross_section, **kwargs)
 
         # stiffness matrices
         assert (
@@ -316,9 +464,6 @@ class DiscreteRod:
         _, self.B_gamma0, self.B_kappa0 = self._eval(Q)
 
         self.__init_coo__(cross_section_inertias)
-
-        # for visualization
-        self._init_ugrid(color)
 
     def __jit_func__(self):
         self._eval = jit(
@@ -1114,116 +1259,3 @@ class DiscreteRod:
 
     def B_Psi_u(self, t, qe, ue, ue_dot, xi):
         return ElementKinematics.B_Psi_u
-
-    def _init_ugrid(self, color):
-        nelement = self.nelement
-        if isinstance(self.cross_section, CircularCrossSection):
-            weights = [
-                1.0,
-                1.0,
-                1.0,
-                0.5,
-                0.5,
-                0.5,
-            ]
-            degrees = [2, 2, 1]
-            ctype = vtk.VTK_BEZIER_WEDGE
-        # elif isinstance(rod.cross_section, RectangularCrossSection):
-        #     npts = 16
-        #     weights = [1] * 16
-        #     degrees = [1, 1, 3]
-        #     ctype = vtk.VTK_BEZIER_HEXAHEDRON
-        else:
-            raise NotImplementedError
-
-        self._ugrid = vtk.vtkUnstructuredGrid()
-
-        # points
-        self._body_points = np.empty((6 * (nelement + 1), 3), dtype=float)
-        array = numpy_to_vtk(self._body_points, deep=False)
-        vtk_points = vtk.vtkPoints()
-        vtk_points.SetData(array)
-        self._ugrid.SetPoints(vtk_points)
-
-        # cells
-        self._ugrid.Allocate(nelement)
-        for i in range(nelement):
-            self._ugrid.InsertNextCell(
-                ctype,
-                12,
-                list(range(i * 6, i * 6 + 3))
-                + list(range((i + 1) * 6, (i + 1) * 6 + 3))
-                + list(range(i * 6 + 3, (i + 1) * 6))
-                + list(range((i + 1) * 6 + 3, (i + 2) * 6)),
-            )
-
-        # point data: RationalWeights
-        pdata = self._ugrid.GetPointData()
-        array = numpy_to_vtk(np.tile(weights, nelement + 1))
-        pdata.SetRationalWeights(array)
-
-        # cell data: HigherOrderDegrees
-        cdata = self._ugrid.GetCellData()
-        array = numpy_to_vtk(np.repeat([degrees], nelement, axis=0))
-        cdata.SetHigherOrderDegrees(array)
-
-        # cell data: Colors
-        array = numpy_to_vtk(np.repeat([color], nelement, axis=0))
-        array.SetName("Colors")
-        cdata.AddArray(array)
-
-        # cell data: Strains
-        self._strain = np.zeros((nelement, 6), dtype=float)
-        array = numpy_to_vtk(self._strain, deep=False)
-        array.SetName("Strains")
-        array.SetComponentName(0, "B_gamma_x")
-        array.SetComponentName(1, "B_gamma_y")
-        array.SetComponentName(2, "B_gamma_z")
-        array.SetComponentName(3, "B_kappa_x")
-        array.SetComponentName(4, "B_kappa_y")
-        array.SetComponentName(5, "B_kappa_z")
-        cdata.AddArray(array)
-
-        # control points on circle
-        phis = np.linspace(0.0, 2.0 * np.pi, 3, endpoint=False)
-        phis2 = phis + (np.pi / 3.0)
-        points = []
-        for n in range(self.nnode):
-            if self.cross_section._variable:
-                radius = self.cross_section.radius(
-                    self.xi_node[n]
-                )  # Assuming a simple case, adjust as needed
-            else:
-                radius = self.cross_section.radius
-            # on circle
-            xys1 = (
-                np.stack([np.zeros_like(phis), np.cos(phis), np.sin(phis)], axis=1)
-                * radius
-            )
-            # out of circle
-            xys2 = np.stack(
-                [np.zeros_like(phis2), np.cos(phis2), np.sin(phis2)], axis=1
-            ) * (2.0 * radius)
-            points.append(np.concatenate([xys1, xys2], axis=0).T)
-        self._ctrl_pts_bezier_circle = np.array(points)
-
-    def _update_ugrid(self, sol_i, strain=False):
-        q_rod = sol_i.q[self.qDOF]
-        q_nodes = self._view_nodal_q(q_rod)
-        r_OC_nodes = q_nodes[:, :3]
-        A_IB_nodes = mj.Exp_SO3_quat_batch(q_nodes[:, 3:]).__array__()
-        points = r_OC_nodes[:, None] + (
-            A_IB_nodes @ self._ctrl_pts_bezier_circle
-        ).swapaxes(1, 2)
-        self._body_points[:] = points.reshape((-1, 3))
-        self._ugrid.Modified()
-
-        # set strain data
-        if strain:
-            _, B_gamma, B_kappa = self._eval(q_rod)
-            self._strain[:, :3] = B_gamma
-            self._strain[:, 3:] = B_kappa
-
-    def export(self, sol_i, **kwargs):
-        self._update_ugrid(sol_i, strain=True)
-        return self._ugrid

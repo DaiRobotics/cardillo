@@ -7,17 +7,72 @@ from jax import jit, numpy as jnp
 from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.rods.discreteRod import ElementKinematics
 from cardillo.rods import DiscreteRod
+from cardillo.visualization.vtk_render2 import RuntimeVisualBase
 
 
-class RodTendonKinematics:
-    def __init__(self, rod: DiscreteRod, xis, B_r_CPs=None, color=(0, 200, 50)) -> None:
+class RodTendonExport(RuntimeVisualBase):
+    def __init__(self, n_vert, tube_radius=1e-3, color=(0, 200, 50), opacity=1):
+        self._color = color
+        self._opacity = opacity
+        self._tube_radius = tube_radius
+        self._init_polydata(n_vert)
+
+    def _init_polydata(self, n_vert):
+        self._polydata = vtk.vtkPolyData()
+        # points
+        self._points = np.empty((n_vert, 3), dtype=float)
+        array = numpy_to_vtk(self._points, deep=False)
+        vtk_points = vtk.vtkPoints()
+        vtk_points.SetData(array)
+
+        self._polydata.SetPoints(vtk_points)
+
+        # cells
+        self._polydata.Allocate(1)
+        self._polydata.InsertNextCell(vtk.VTK_LINE, n_vert, np.arange(n_vert))
+
+    def _update_polydata(self, sol_i):
+        q = sol_i.q[self.qDOF]
+        self._points[:] = self._r_OP_verts(q)
+        self._polydata.Modified()
+
+    def export(self, sol_i, **kwargs):
+        self._update_polydata(sol_i)
+        return self._polydata
+
+    def to_vtk_actors(self):
+
+        poly_data = self._polydata
+
+        filter = vtk.vtkTubeFilter()
+        filter.SetRadius(self._tube_radius)
+        filter.SetInputData(poly_data)
+        filter.SetNumberOfSides(8)
+        filter.CappingOn()
+
+        mapper = vtk.vtkDataSetMapper()
+        mapper.SetInputConnection(filter.GetOutputPort())
+
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetColor(([c / 255 for c in self._color]))
+        actor.GetProperty().SetOpacity(self._opacity)
+
+        return [actor]
+
+    def update_vtk_actors(self, sol_i):
+        self._update_polydata(sol_i)
+
+
+class RodTendonKinematics(RodTendonExport):
+    def __init__(self, rod: DiscreteRod, xis, B_r_CPs=None, **kwargs) -> None:
+        super().__init__(len(xis), **kwargs)
         self.rod = rod
         self.xis = xis
         self.n_vert = len(xis)
         self.B_r_CPs = (
             np.zeros((self.n_vert, 3)) if B_r_CPs is None else np.asarray(B_r_CPs)
         )
-        self._color = color
 
         self._alpha_verts = np.array([self.rod._alpha(xi) for xi in self.xis])
 
@@ -37,9 +92,6 @@ class RodTendonKinematics:
                 q2 = 14 * self.n_vert
 
             self._W_t_q_coo[u1:u2, q1:q2] = np.empty((u2 - u1, q2 - q1))
-
-        # for visualization
-        self._init_poly_data()
 
     def _r_OP_verts_jax(self, q):
         return ElementKinematics.r_OP_batch(
@@ -137,38 +189,13 @@ class RodTendonKinematics:
         self.qDOF = np.concatenate([rod.qDOF[rod.elDOF[el]] for el in els])
         self.uDOF = np.concatenate([rod.uDOF[rod.elDOF_u[el]] for el in els])
 
-    def _init_poly_data(self):
-        self._poly_data = vtk.vtkPolyData()
-        # points
-        self._points = np.empty((self.n_vert, 3), dtype=float)
-        array = numpy_to_vtk(self._points, deep=False)
-        vtk_points = vtk.vtkPoints()
-        vtk_points.SetData(array)
-
-        self._poly_data.SetPoints(vtk_points)
-
-        # cells
-        self._poly_data.Allocate(1)
-        self._poly_data.InsertNextCell(
-            vtk.VTK_LINE, self.n_vert, np.arange(self.n_vert)
-        )
-
-    def _update_poly_data(self, sol_i):
-        q = sol_i.q[self.qDOF]
-        self._points[:] = self._r_OP_verts(q)
-        self._poly_data.Modified()
-
-    def export(self, sol_i, **kwargs):
-        self._update_poly_data(sol_i)
-        return self._poly_data
-
 
 class RodTendonForce(RodTendonKinematics):
     def __init__(
         self, rod: DiscreteRod, xis, B_r_CPs=None, name="tendon", color=(0, 200, 50)
     ) -> None:
         self.name = name
-        super().__init__(rod, xis, B_r_CPs, color)
+        super().__init__(rod, xis, B_r_CPs=B_r_CPs, color=color)
 
         self.nla_tau = 1
 

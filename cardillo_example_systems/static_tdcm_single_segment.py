@@ -136,14 +136,13 @@ def gen_single_segment_tdcm(live_plotter=False):
 
     if live_plotter:
         # ---- visual objects ----
-        from cardillo.visualization import (
+        from cardillo.visualization.vtk_render2 import (
             Plotter,
-            VisualSTL,
-            # VisualCoordSystem,
-            VisualArUco,
+            RuntimeVisualSTL,
+            RuntimeVisualArUco,
         )
 
-        VisualArUco(
+        RuntimeVisualArUco(
             rod,
             xi=1,
             mk_size=0.04,
@@ -153,7 +152,7 @@ def gen_single_segment_tdcm(live_plotter=False):
             @ np.array([0, 0, connector_h + mk_platform_h - mk_platform_cut_h]),
         )
 
-        VisualSTL(
+        RuntimeVisualSTL(
             rod,
             "scripts_tdcrobots/stl/Segment_Foot_V2.stl",
             xi=1,
@@ -162,7 +161,7 @@ def gen_single_segment_tdcm(live_plotter=False):
             scale=1e-3,
             color=(160, 160, 160),
         )
-        VisualSTL(
+        RuntimeVisualSTL(
             rod,
             "scripts_tdcrobots/stl/Marker_Platform_Target_V2.stl",
             xi=1,
@@ -171,7 +170,7 @@ def gen_single_segment_tdcm(live_plotter=False):
             scale=1e-3,
             color=(255, 250, 240),
         )
-        VisualSTL(
+        RuntimeVisualSTL(
             system.origin,
             "scripts_tdcrobots/stl/Segment_Foot_V2.stl",
             B_r_CP=np.array([0, 0, connector_h - mk_platform_cut_h / 2]),
@@ -184,7 +183,7 @@ def gen_single_segment_tdcm(live_plotter=False):
         x0, x1 = -0.2, 0.2
         y0, y1 = -0.2, 0.2
         res_x = res_y = 10
-        plotter.add_ground(x0, x1, y0, y1, res_x, res_y)
+        plotter.add_ground(x0, x1, y0, y1, subdivision_x=res_x, subdivision_y=res_y)
         # ---- camera pose ----
         r_OC = np.array([0, -0.35, 0.1], float)
         # r_OC = np.array([0, -0.35, 0.15], float)

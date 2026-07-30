@@ -202,4 +202,4 @@ plt.show(block=False)
 
 plotter = Plotter(system_dyn, window_size=(960, 540))
 plotter.add_ground(*[0.2, -0.2, 0.2, -0.2, -0.15], 10, 10)
-plotter.render_solution(Solution(system_dyn, t, q), True, play_speed_up=2)
+plotter.render_solution(sol, speed_up=2)
