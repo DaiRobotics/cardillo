@@ -338,7 +338,7 @@ def setpoint_trajectory_as(t_move, t_hold, Kp=0.0, Kd=0.0, damping_ratio=0.0):
     # print(Kp, Kd)
     # visualization_p2p(dynamic_model, sol, r_OP_ref_fn)
 
-def e2a_as(t_move, t_hold, Kp=0.0, Kd=0.0, damping_ratio=0.0):
+def e2a_as(t_move, t_hold, Kp=0.0, Kd=0.0, damping_ratio=0.0, save_ref=None):
     la_t_ref0 = la_t_A[None, :]
     la_t_ref = np.concatenate([la_t_E[None, :], la_t_ref0])
     la_t_ref_hold, ts2 = add_segment_holds(la_t_ref, segment_length=1, t_move=t_move, t_hold=t_hold)
@@ -360,6 +360,13 @@ def e2a_as(t_move, t_hold, Kp=0.0, Kd=0.0, damping_ratio=0.0):
     )
     r_OP_ref = sol.q[:, -7:-4]
     r_OP_ref = np.concatenate((r_OP_E[None, :], r_OP_ref))
+
+    # ----- save discrete reference tip path (row 0 = E, last row = A) -----
+    if save_ref is not None:
+        save_path = Path(__file__).parent / save_ref
+        pd.DataFrame(r_OP_ref, columns=["X", "Y", "Z"]).to_csv(save_path, index=False)
+        print(f"saved E->A reference points ({r_OP_ref.shape[0]} pts) to {save_path}")
+
     r_OP_ref_hold, ts = add_segment_holds(r_OP_ref, segment_length=force_steps, t_move=t_move, t_hold=t_hold)
 
     def r_OP_ref_fn(t):

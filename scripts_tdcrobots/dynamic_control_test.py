@@ -26,7 +26,8 @@ import pandas as pd
 
 from espedal_control_test import p2p_vis_plot
 from runge_kutta import *
-from dynamic_controller import DynamicControllerPD
+from dynamic_controller import *
+# from pid_controller import *
 
 # G_ACCEL = -1
 G_ACCEL = 9.81
@@ -50,7 +51,7 @@ def paper_to_cardillo(u):
 SETPOINT_TABLE = {k: paper_to_cardillo(u) for k, u in SETPOINT_TABLE.items()}
 
 class CommonModel(ABC):
-    def __init__(self, damping_ratio=0):
+    def __init__(self, damping_ratio=0, la_pre=0.0):
         super().__init__()
         # ---- pysical parameters ----
         rod_nelement = 10  # 1000
@@ -135,6 +136,13 @@ class CommonModel(ABC):
             )
             self.tendons.append(tendon)
 
+        # ---- tendon pretension (constant baseline tension, keeps tendons taut) ----
+        # Adds -pretension * W_l into sys.h; the controller reads sys.h in y_0_ddot
+        # and compensates automatically, so the real tension is pretension + la_tau.
+        self.la_pre = la_pre
+        for tendon in self.tendons:
+            tendon.set_force(la_pre)
+
         self.system.add(self.rod, rc, *self.tendons)
 
         # ---- external forces ----
@@ -151,9 +159,12 @@ def la_t_plot(model, la_ts, sol):
     import matplotlib.pyplot as plt
     ts = sol.t
 
+    f_pre = getattr(model, "pretension", 0.0)
     fig, ax = plt.subplots(num="TendonForces", figsize=(8, 4))
     for k in range(model.n_tendons):
-        ax.plot(ts, la_ts[:, k], label=f"tendon {k+1}")
+        ax.plot(ts, la_ts[:, k] + f_pre, label=f"tendon {k+1}")
+    if f_pre > 0:
+        ax.axhline(f_pre, color="k", ls="--", lw=0.8, label=f"pretension ({f_pre:g} N)")
     ax.set_xlabel("Time [s]"); ax.set_ylabel("Tendon Force [N]")
     ax.set_title("Tendon Forces"); ax.legend(); ax.grid(True)
     plt.show()
@@ -171,7 +182,8 @@ if __name__ == "__main__":
     q0_E = pd.read_csv(csv_file)["q0_E"].to_numpy()
 
     damping_ratio = 0.1
-    model = CommonModel(damping_ratio=damping_ratio) # dt = 1e-4 for damping_ratio = 1e-3
+    la_pre = 0.0  # pretension tendon force
+    model = CommonModel(damping_ratio=damping_ratio, la_pre=la_pre) # dt = 1e-4 for damping_ratio = 1e-3
     # model.rod.q0 = q0_E.copy() # Start at E
     system = model.system
     rod = model.rod
@@ -180,22 +192,35 @@ if __name__ == "__main__":
     # Parameters
     Kp = 200.0
     Kd = 20.0
+    Ki = 400.0
+    # Kp = 100
+    # Kd = 20
     inv_damping = 1e-3
 
     # Trajectories
     # r_OP_ref_fn = lambda t: np.array([0.0, 0.0, 0.192])
-    r_OP_ref_fn = lambda t: SETPOINT_TABLE["A"]
+    # r_OP_ref_fn = lambda t: SETPOINT_TABLE["A"]
+
+    # Static reference points from E to A
+    csv = Path(__file__).parent / "e2a_ref_points.csv"
+    r_OP_refs = pd.read_csv(csv).to_numpy()
+    t_move = 5.0
+    ts_ref = np.linspace(0.0, t_move, len(r_OP_refs))
+
+    # def r_OP_ref_fn(t):   
+    #     t = np.clip(t, 0.0, t_move)                  # hold at A after t_move
+    #     return np.array([np.interp(t, ts_ref, r_OP_refs[:, i]) for i in range(3)])
     
     # P2P Setpoints Trajectory
-    # def p2p_sequence(names, t_hold=5.0):
-    #     pts = [SETPOINT_TABLE[n] for n in names]
-    #     def r_OP_ref_fn(t):
-    #         idx = min(int(t // t_hold), len(pts) - 1)
-    #         return pts[idx]
-    #     return r_OP_ref_fn
+    def p2p_sequence(names, t_hold=5.0):
+        pts = [SETPOINT_TABLE[n] for n in names]
+        def r_OP_ref_fn(t):
+            idx = min(int(t // t_hold), len(pts) - 1)
+            return pts[idx]
+        return r_OP_ref_fn
 
     # No smoothing
-    # r_OP_ref_fn = p2p_sequence(["A", "B", "C", "D", "E"], t_hold=5.0)
+    r_OP_ref_fn = p2p_sequence(["A", "B", "C", "D", "E"], t_hold=5.0)
     v_P_ref_fn = lambda t: np.zeros(3)
     a_P_ref_fn = lambda t: np.zeros(3)
 
@@ -225,16 +250,20 @@ if __name__ == "__main__":
         return (lambda t: ref_fns(t)[0], lambda t: ref_fns(t)[1], lambda t: ref_fns(t)[2])
 
     # Smoothing
-    # r_OP_ref_fn , v_P_ref_fn, a_P_ref_fn = smooth_p2p_sequence(["A", "B", "C", "D", "E"], t_hold=5.0, t_move=1.0)
+    # r_OP_ref_fn , v_P_ref_fn, a_P_ref_fn = smooth_p2p_sequence(["A", "B", "C", "D", "E"], t_hold=5.0, t_move=0.5)
 
-    controller = DynamicControllerPD(system, rod, tendons, r_OP_ref_fn, v_P_ref_fn=v_P_ref_fn, a_P_ref_fn=a_P_ref_fn, Kp=Kp, Kd=Kd, inv_damping=inv_damping)
-    # system.add(controller)
+    common = dict(v_P_ref_fn=v_P_ref_fn, a_P_ref_fn=a_P_ref_fn, Kp=Kp, Kd=Kd, Ki=Ki, inv_damping=inv_damping, method="pinv")
+
+    # controller = DynamicControllerPD(system, rod, tendons, r_OP_ref_fn, **common)  # NNLS baseline
+    controller = ClarkeShiftController(system, rod, tendons, r_OP_ref_fn, f_min=0.5, leak_iters=0, **common)
+    # controller = DynamicControllerPID(system, rod, tendons, r_OP_ref_fn, Kp=Kp, Kd=Kd, Ki=Ki, inv_damping=inv_damping, method="pinv")
+    system.add(controller)
     system.assemble()
 
     # Solver
-    # t_sim = 25
+    t_sim = 25
     # t_sim = 5
-    t_sim = 2
+    # t_sim = 2
     dt = 1e-4
     # solver = BackwardEuler(system, t_sim, dt)
     solver = ScipyDAE(system, t_sim, dt)
@@ -249,10 +278,10 @@ if __name__ == "__main__":
     # solver = ProbeRK(system, controller, t_sim, dt, fixed_qDOF=fixed_qDOF, fixed_uDOF=fixed_uDOF)
     
     sol = solver.solve()
-    print(f"Kp = {Kp}, Kd = {Kd}, damping ratio = {damping_ratio}, t_sim = {t_sim}, dt = {dt}")
+    print(f"Kp = {Kp}, Kd = {Kd}, Ki = {Ki}, damping ratio = {damping_ratio}, t_sim = {t_sim}, dt = {dt}")
 
     p2p_vis_plot(model, sol, r_OP_ref_fn)
-    plt.show()
-    # la_ts = compute_la_ts(controller, sol)
-    # la_t_plot(model, la_ts, sol)
+    # plt.show()
+    la_ts = compute_la_ts(controller, sol)
+    la_t_plot(model, la_ts, sol)
     # probe_plot(solver)
