@@ -3,7 +3,7 @@ import warnings
 from copy import deepcopy
 from scipy.sparse import diags
 
-from cardillo.utility.coo_matrix import CooMatrix, CooArray
+from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.discrete.frame import Frame
 from cardillo.discrete.meshed import Axis
 from cardillo.solver import consistent_initial_conditions
@@ -350,9 +350,9 @@ class System:
             return q_dot
         elif format == "Coo":
             if coo is None:
-                coo = CooArray(self.nq)
+                coo = CooMatrix((1, self.nq))
             for i, contr in enumerate(self.__q_dot_contr):
-                coo[i, contr.my_qDOF] = contr.q_dot(t, q[contr.qDOF], u[contr.uDOF])
+                coo[i, 0, contr.my_qDOF] = contr.q_dot(t, q[contr.qDOF], u[contr.uDOF])
             return coo
 
     def q_dot_q(self, t, q, u, format="coo", coo=None):
@@ -429,9 +429,9 @@ class System:
             return h
         elif format == "Coo":
             if coo is None:
-                coo = CooArray(self.nu)
+                coo = CooMatrix((1, self.nu))
             for i, contr in enumerate(self.__h_contr):
-                coo[i, contr.uDOF] = contr.h(t, q[contr.qDOF], u[contr.uDOF])
+                coo[i, 0, contr.uDOF] = contr.h(t, q[contr.qDOF], u[contr.uDOF])
             return coo
 
     def h_q(self, t, q, u, format="coo", coo=None):
@@ -467,9 +467,9 @@ class System:
             return c
         elif format == "Coo":
             if coo is None:
-                coo = CooArray(self.nla_c)
+                coo = CooMatrix((1, self.nla_c))
             for i, contr in enumerate(self.__c_contr):
-                coo[i, contr.la_cDOF] = contr.c(
+                coo[i, 0, contr.la_cDOF] = contr.c(
                     t, q[contr.qDOF], u[contr.uDOF], la_c[contr.la_cDOF]
                 )
             return coo

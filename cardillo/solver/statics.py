@@ -2,7 +2,7 @@ import numpy as np
 from scipy.sparse import lil_array, bmat
 from tqdm import tqdm
 
-from cardillo.utility.coo_matrix import CooMatrix, CooArray
+from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.math.fsolve import fsolve
 from cardillo.solver.solver_options import SolverOptions
 from cardillo.solver.solution import Solution
@@ -73,10 +73,10 @@ class Newton:
         self._g_S_q_coo = CooMatrix((system.nla_S, system.nq), manual_sync=True)
         self._Wla_N_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
         self._g_N_q_coo = CooMatrix((system.nla_N, system.nq), manual_sync=True)
-        self._c_coo = CooArray(system.nla_c, manual_sync=True)
-        self._h_coo = CooArray(system.nu, manual_sync=True)
+        self._c_coo = CooMatrix((1, system.nla_c), manual_sync=True)
+        self._h_coo = CooMatrix((1, system.nu), manual_sync=True)
         self._jac_coo = CooMatrix((self.nx, self.nx), manual_sync=True)
-        self._F_coo = CooArray(self.nx, manual_sync=True)
+        self._F_coo = CooMatrix((1, self.nx), manual_sync=True)
 
     def fun(self, x, t):
         t = float(t)
@@ -103,32 +103,32 @@ class Newton:
         # static equilibrium
         F = self._F_coo
 
-        F["h", :r0] = h
+        F["h", 0, :r0] = h
 
         W_g.manual_sync()
-        F["Wla_g", :r0] = W_g.tocsr(fix_size=True) @ la_g
+        F["Wla_g", 0, :r0] = W_g.tocsr(fix_size=True) @ la_g
 
         W_c.manual_sync()
         la_tau = self.system.la_tau(t, q, self.u0)
-        F["Wla_c", :r0] = W_c.tocsr(fix_size=True) @ la_c
+        F["Wla_c", 0, :r0] = W_c.tocsr(fix_size=True) @ la_c
 
         W_tau.manual_sync()
-        F["Wla_tau", :r0] = W_tau.tocsr(fix_size=True) @ la_tau
+        F["Wla_tau", 0, :r0] = W_tau.tocsr(fix_size=True) @ la_tau
 
         if self.nla_N:
             W_N = self._W_N_coo = self.system.W_N(t, q, format="Coo", coo=self._W_N_coo)
             W_N.manual_sync()
-            F["Wla_N", :r0] = W_N.tocsr(fix_size=True) @ la_N
+            F["Wla_N", 0, :r0] = W_N.tocsr(fix_size=True) @ la_N
 
-        F["g", r0:r1] = self.system.g(t, q)
-        F["c", r1:r2] = c
-        F["g_S", r2:r3] = self.system.g_S(t, q)
+        F["g", 0, r0:r1] = self.system.g(t, q)
+        F["c", 0, r1:r2] = c
+        F["g_S", 0, r2:r3] = self.system.g_S(t, q)
 
         if self.nla_N:
             g_N = self.g_N = self.system.g_N(t, q)
-            F["Rla_N", r3:] = np.minimum(la_N, g_N)
+            F["Rla_N", r3:, 0] = np.minimum(la_N, g_N)
         F.manual_sync()
-        return F.toarray(fix_size=True)
+        return F.toarray(fix_size=True).ravel()
 
     def jac(self, x, t):
         t = float(t)

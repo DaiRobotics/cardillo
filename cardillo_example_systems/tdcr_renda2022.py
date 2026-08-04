@@ -1,3 +1,5 @@
+import scipy as sp
+
 from cardillo.constraints import RigidConnection
 from cardillo.rods.force_line_distributed import Force_line_distributed
 
@@ -11,6 +13,7 @@ from cardillo.rods import (
 )
 from cardillo.system import System
 from cardillo.utility.coo_matrix import CooMatrix
+from cardillo.math import Log_SO3, Log_SO3_A, Exp_SO3_quat, Exp_SO3_quat_P
 
 import numpy as np
 
@@ -31,23 +34,56 @@ class Controller:
         self.q0 = np.zeros(self.nq, dtype=np.float64)
 
         self.Kp = Kp
-        self.dr_OP_dla_t_inv = np.zeros((self.nla_tau, 3), dtype=np.float64)
+        self.dq_dla_t = None
         self.r_OP_traj = lambda t: (
-            np.array([0.0, 0.0, 0.0], dtype=np.float64)
-            if r_OP_traj is None
-            else r_OP_traj
+            self.rod.q0[-7:-4] if r_OP_traj is None else r_OP_traj
         )
 
     def q_dot(self, t, q, u):
-        r_OP = q[-7 - self.nla_tau : -4 - self.nla_tau]
+        if self.dq_dla_t is None:
+            return np.zeros(self.nq, dtype=np.float64)
+        q_tip = q[-7 - self.nla_tau :]
+        r_OP = q_tip[:3]
+        p_IB = q_tip[3:7]
+        A_IB = Exp_SO3_quat(p_IB)
+
+        try:
+            A_IB_ref = self.A_IB_ref
+        except AttributeError:
+            A_IB_ref = self.A_IB_ref = A_IB
         r_OP_def = self.r_OP_traj(t)
-        return self.dr_OP_dla_t_inv @ (r_OP_def - r_OP) * self.Kp
+
+        A = A_IB_ref.T @ A_IB
+        psi = Log_SO3(A)
+        delta = np.concatenate([r_OP_def - r_OP, -psi])
+
+        dr_dla_t = self.dq_dla_t[:3]
+
+        dpsi_dA = Log_SO3_A(A)
+        dA_dp = (Exp_SO3_quat_P(p_IB).T @ A_IB_ref).T
+        # dA_dp = Exp_SO3_quat_P(p_IB)
+        dpsi_dp = np.einsum("ijk, jkl -> il", dpsi_dA, dA_dp)
+        dpsi_dla_t = dpsi_dp @ self.dq_dla_t[3:]
+
+        # return np.linalg.pinv(dr_dla_t) @ delta[:3] * self.Kp
+
+        # dpsi_dla_t[np.bitwise_and(dpsi_dla_t<1e-12, dpsi_dla_t>-1e-12)] = 0
+        dy_dla_t = np.concatenate([dr_dla_t, dpsi_dla_t])
+        dy_dla_t[3] = 0
+        delta[3] = 0
+        delta[3:] /= (
+            np.pi * 100 / 18
+        )  # scale the rotation error to be comparable to the position error
+        x, res, rnk, s = sp.linalg.lstsq(dy_dla_t, delta)
+        return x * self.Kp
+
+        return np.linalg.solve(np.concatenate([dr_dla_t, dpsi_dla_t]), delta) * self.Kp
 
     def q_dot_q(self, t, q, u):
         coo = CooMatrix((self.nq, self._nq))
-        coo[:, -self.nla_tau - 7 : -self.nla_tau - 4] = self.dr_OP_dla_t_inv * (
-            -self.Kp
-        )
+        coo[:, -self.nla_tau - 7 : -self.nla_tau - 4] = np.linalg.pinv(
+            self.dq_dla_t[:3]
+        ) * (-self.Kp)
         return coo
 
     def W_tau(self, t, q):
@@ -97,17 +133,19 @@ class Controller:
         self._nu = len(self.uDOF)
 
 
-def gen_tdcr_li2023(
-    rod_nelement=10, g_accel=9.81, damping_ratio=0, statics=True, controller=False
+def gen_tdcr_renda2022(
+    rod_nelement=29, g_accel=9.81, damping_ratio=0, statics=True, controller=False
 ):
     # ---- pysical parameters ----
-    rod_l0 = 0.192  # [m] length of rod
-    rod_r_base = 14e-3  # [m] radius at bottom of rod
-    rod_r_tip = 8.5e-3  # [m] radius at tip of rod
-    rod_density = 1.41e3  # density of material
+    rod_l0 = 0.58  # [m] length of rod
+    rod_r_base = 15e-3  # [m] radius at bottom of rod
+    rod_r_tip = 8e-3  # [m] radius at tip of rod
+    rod_density = 1.41e3  # density of material (not provided in paper)
     rod_r_OC0 = np.array([0, 0, 0], dtype=np.float64)
     rod_A_IB0 = np.eye(3, dtype=np.float64)
-    E, G = 2.563e5, 8.543e4
+    E = 0.593e6
+    v = 0.5
+    G = E / (2 * (1 + v))
 
     # ---- rod ----
     radius = lambda xi: rod_r_base * (1 - xi) + rod_r_tip * xi
@@ -172,9 +210,15 @@ def gen_tdcr_li2023(
     system.add(rod_gravity)
 
     # ---- tendons ----
-    n_tendons = 4
     tendons = []
-    assert rod_nelement % 12 == 0, "rod_nelement must be a multiple of 12"
+    assert rod_nelement % 29 == 0, "rod_nelement must be a multiple of 29"
+    phis = np.linspace(0, 2 * np.pi, 6, endpoint=False)
+    for xi_end in [10 / 29, 1]:
+        n_xi = int(rod_nelement * xi_end)
+        assert xi_end == rod.xi_node[n_xi]
+    xi_list = [np.linspace(0, 10 / 29, n_xi + 1)] * 3 + [
+        np.linspace(0, 1, n_xi + 1)
+    ] * 3
     B_r_CP_lists = [
         [
             np.array(
@@ -184,23 +228,35 @@ def gen_tdcr_li2023(
                     -radius(xi) * np.cos(phi),
                 ]
             )
-            for xi in np.linspace(0, 1, 13)
+            for xi in xi_list[0]
         ]
-        for phi in np.linspace(0, 2 * np.pi, n_tendons, endpoint=False)
+        for phi in phis[::2]
     ]
-    for B_r_CP_list in B_r_CP_lists:
-        n_vert = len(B_r_CP_list)
+    B_r_CP_lists += [
+        [
+            np.array(
+                [
+                    0,
+                    radius(xi) * np.sin(phi),
+                    -radius(xi) * np.cos(phi),
+                ]
+            )
+            for xi in xi_list[3]
+        ]
+        for phi in phis[1::2]
+    ]
+    for B_r_CPs, xis in zip(B_r_CP_lists, xi_list):
         if statics:
             tendon = RodTendonForce(
                 rod,
-                xis=[i / (n_vert - 1) for i in range(n_vert)],
-                B_r_CPs=B_r_CP_list,
+                xis=xis,
+                B_r_CPs=B_r_CPs,
             )
         else:
             tendon = RodTendonKinematics(
                 rod,
-                xis=[i / (n_vert - 1) for i in range(n_vert)],
-                B_r_CPs=B_r_CP_list,
+                xis=xis,
+                B_r_CPs=B_r_CPs,
             )
         tendons.append(tendon)
 

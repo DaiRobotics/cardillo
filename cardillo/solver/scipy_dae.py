@@ -4,7 +4,7 @@ from scipy_dae.integrate import solve_dae
 from tqdm import tqdm
 
 from cardillo.solver import Solution, SolverSummary
-from cardillo.utility.coo_matrix import CooMatrix, CooArray
+from cardillo.utility.coo_matrix import CooMatrix
 
 
 # TODO:
@@ -88,16 +88,16 @@ class ScipyDAE:
         self.pbar_i = 0
 
         # data allocation
-        self.F = CooArray(self.ny, manual_sync=True)
-        self.h = CooArray(system.nu, manual_sync=True)
-        self.c = CooArray(system.nla_c, manual_sync=True)
+        self.F = CooMatrix((1, self.ny), manual_sync=True)
+        self.h = CooMatrix((1, system.nu), manual_sync=True)
+        self.c = CooMatrix((1, system.nla_c), manual_sync=True)
         self.g_q1 = CooMatrix((system.nla_g, system.nq), manual_sync=True)
         self.g_q1_T = CooMatrix((system.nq, system.nla_g), manual_sync=True)
         self._W_tau = CooMatrix((system.nu, system.nla_tau), manual_sync=True)
         self.W_g1 = CooMatrix((system.nu, system.nla_g), manual_sync=True)
         self.W_gamma1 = CooMatrix((system.nu, system.nla_gamma), manual_sync=True)
         self.W_c1 = CooMatrix((system.nu, system.nla_c), manual_sync=True)
-        self.q_dot = CooArray(system.nq, manual_sync=True)
+        self.q_dot = CooMatrix((1, system.nq), manual_sync=True)
         self.q_dot_q = CooMatrix((system.nq, system.nq), manual_sync=True)
         self.q_dot_u = CooMatrix((system.nq, system.nu), manual_sync=True)
 
@@ -176,49 +176,49 @@ class ScipyDAE:
         ####################
         # kinematic equation
         ####################
-        F["q_dot", :s1] = q_dot
-        F["q_dot2", :s1, True] = q_dot2
+        F["q_dot", 0, :s1] = q_dot
+        F["q_dot2", 0, :s1, True] = q_dot2
         if self.nla_g:
             g_q.manual_sync()
-            F["g_q_T_mu_g", :s1, True] = g_q_T.tocsr(fix_size=True) @ mu_g
+            F["g_q_T_mu_g", 0, :s1, True] = g_q_T.tocsr(fix_size=True) @ mu_g
 
         ####################
         # equations of motion
         ####################
         M = self.M2 = self.system.M(t, q, format="Coo", coo=self.M2)
-        F["Mu", s1:s2] = M.tocsr(fix_size=True) @ u_dot
-        F["h", s1:s2, True] = h
+        F["Mu", 0, s1:s2] = M.tocsr(fix_size=True) @ u_dot
+        F["h", 0, s1:s2, True] = h
         if sys.nla_tau:
             W_tau.manual_sync()
-            F["Wla_tau", s1:s2, True] = W_tau.tocsr(fix_size=True) @ self.system.la_tau(
-                t, q, u
-            )
+            F["Wla_tau", 0, s1:s2, True] = W_tau.tocsr(
+                fix_size=True
+            ) @ self.system.la_tau(t, q, u)
         if sys.nla_g:
             W_g.manual_sync()
-            F["Wla_g", s1:s2, True] = W_g.tocsr(fix_size=True) @ la_g
+            F["Wla_g", 0, s1:s2, True] = W_g.tocsr(fix_size=True) @ la_g
         if sys.nla_gamma:
-            F["Wla_gamma", s1:s2, True] = W_gamma.tocsr(fix_size=True) @ la_gamma
+            F["Wla_gamma", 0, s1:s2, True] = W_gamma.tocsr(fix_size=True) @ la_gamma
         if sys.nla_c:
             W_c.manual_sync()
-            F["Wla_c", s1:s2, True] = W_c.tocsr(fix_size=True) @ la_c
+            F["Wla_c", 0, s1:s2, True] = W_c.tocsr(fix_size=True) @ la_c
 
         #######################
         # bilateral constraints
         #######################
         if sys.nla_g:
-            F["g", s2:s3] = self.system.g(t, q)
-            F["g_dot", s3:s4] = self.system.g_dot(t, q, u)
+            F["g", 0, s2:s3] = self.system.g(t, q)
+            F["g_dot", 0, s3:s4] = self.system.g_dot(t, q, u)
 
         if sys.nla_gamma:
-            F["gamma", s4:s5] = self.system.gamma(t, q, u)
+            F["gamma", 0, s4:s5] = self.system.gamma(t, q, u)
 
         ############
         # compliance
         ############
         if sys.nla_c:
-            F["c", s5:] = c
+            F["c", 0, s5:] = c
         F.manual_sync()
-        return F.toarray(fix_size=True)
+        return F.toarray(fix_size=True).ravel()
 
     def jac(self, t, y, yp):
         t = float(t)
