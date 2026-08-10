@@ -29,6 +29,12 @@ from runge_kutta import *
 from dynamic_controller import *
 # from pid_controller import *
 
+# QP positivity controller: min ||W_tau x - W_tau la_tau|| s.t. x >= 0.
+# It lives in a subfolder whose name contains a space, so add it to the path explicitly.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent / "quadratic programming"))
+from qp_wtau_controller import QPWTauController
+
 # G_ACCEL = -1
 G_ACCEL = 9.81
 # G_ACCEL = 7
@@ -252,17 +258,20 @@ if __name__ == "__main__":
     # Smoothing
     # r_OP_ref_fn , v_P_ref_fn, a_P_ref_fn = smooth_p2p_sequence(["A", "B", "C", "D", "E"], t_hold=5.0, t_move=0.5)
 
-    common = dict(v_P_ref_fn=v_P_ref_fn, a_P_ref_fn=a_P_ref_fn, Kp=Kp, Kd=Kd, Ki=Ki, inv_damping=inv_damping, method="pinv")
+    common = dict(v_P_ref_fn=v_P_ref_fn, a_P_ref_fn=a_P_ref_fn, Kp=Kp, Kd=Kd, inv_damping=inv_damping)
+    
+    # common = dict(v_P_ref_fn=v_P_ref_fn, a_P_ref_fn=a_P_ref_fn, Kp=Kp, Kd=Kd, Ki=Ki, inv_damping=inv_damping, method="pinv")
 
-    # controller = DynamicControllerPD(system, rod, tendons, r_OP_ref_fn, **common)  # NNLS baseline
-    controller = ClarkeShiftController(system, rod, tendons, r_OP_ref_fn, f_min=0.5, leak_iters=0, **common)
+    controller = QPWTauController(system, rod, tendons, r_OP_ref_fn, **common)  # QP, la_tau >= 0
+    # controller = DynamicControllerPD(system, rod, tendons, r_OP_ref_fn, **common)  # unconstrained (damped pinv)
+    # controller = ClarkeShiftController(system, rod, tendons, r_OP_ref_fn, f_min=0.5, leak_iters=0, **common)
     # controller = DynamicControllerPID(system, rod, tendons, r_OP_ref_fn, Kp=Kp, Kd=Kd, Ki=Ki, inv_damping=inv_damping, method="pinv")
     system.add(controller)
     system.assemble()
 
     # Solver
     t_sim = 25
-    # t_sim = 5
+    # t_sim = 10
     # t_sim = 2
     dt = 1e-4
     # solver = BackwardEuler(system, t_sim, dt)

@@ -60,42 +60,6 @@ def la_t_from_solution(controller, sol):
 
 
 class StaticControllerLi2023(BaseActuator):
-    """Integrating tip-position controller on the static compliance Jacobian.
-
-    Generalized coordinates of the contribution: `q = [la_t, q_rod]`, where the
-    first `nq = len(tendons)` entries are the controller's own state (the
-    tendon tensions) and the rest are the rod coordinates it reads.
-
-    Parameters
-    ----------
-    system, rod, tendons
-        The assembled-into system, the rod and its `RodTendonForce` tendons.
-    Gamma : (3, n_tendons) array
-        Static compliance Jacobian d r_OP / d la_t at the linearization point.
-    r_OP_ref_fn, v_P_ref_fn : callable(t) -> (3,) array
-        Reference tip position / velocity.
-    Kp, Kd : float
-        Proportional / derivative gain of the outer loop.
-    la_t0 : (n_tendons,) array
-        Initial tendon tensions (initial value of the controller state).
-    la_t_ff : callable(t) -> (n_tendons,) array
-        Feedforward tension added on top of the integrator state, e.g. a
-        pretension. It is not integrated, so it does not enter `q_dot`.
-    la_t_min, la_t_max : float or (n_tendons,) array
-        Bounds of the tendon tensions. The state is clamped in
-        `step_callback` and the corresponding integrator rates are frozen
-        (anti-windup), consistently in `q_dot`, `q_dot_q` and `q_dot_u`.
-        `la_t_min=0` keeps the tensions non-negative; pass `-np.inf` to
-        switch the saturation off.
-    inv_damping : float
-        Levenberg damping of the right inverse of `Gamma`.
-    gamma_fn : callable(t, la_t) -> (3, n_tendons) array
-        Optional re-evaluation of `Gamma` at the current tensions, e.g.
-        `lambda t, la_t: eval_gamma(static_model, la_t)[0]`. Called at most
-        every `gamma_check_dt` from `step_callback`; the stored `Gamma` is
-        replaced only when the relative change exceeds `gamma_eps`.
-    """
-
     def __init__(
         self,
         system,
@@ -176,7 +140,7 @@ class StaticControllerLi2023(BaseActuator):
     def _rod_q(self, q):
         return q[self.nq :]
 
-    ## ----- force directions -----
+    ## ----- Force Directions -----
 
     def W_tau(self, t, q):
         W_tau = np.zeros((self._nu, self.nla_tau))
@@ -195,7 +159,7 @@ class StaticControllerLi2023(BaseActuator):
             np.add.at(W_tau_q[:, j, :], (uDOF[:, None], qDOF[None, :]), -W_l_q)
         return W_tau_q
 
-    ## ----- tendon forces -----
+    ## ----- Tendon Forces -----
 
     def la_tau(self, t, q, u):
         return q[: self.nq] + self.la_t_ff(t)
@@ -235,17 +199,21 @@ class StaticControllerLi2023(BaseActuator):
         return q_dot_q * self._free(q, la_t_dot)[:, None]
 
     def q_dot_u(self, t, q):
-        # u is not available here; the saturation mask is the one of the last
-        # accepted state, which is what step_callback clamped.
+        # u is not available here, so the rate needed for the saturation mask
+        # cannot be evaluated; reuse the mask of the last accepted step.
         q_dot_u = np.zeros((self.nq, self._nu))
         q_dot_u[:, self._tip_v] = -self.Kd * self.Gamma_inv
         return q_dot_u * self._free_last[:, None]
 
-    ## ----- accepted step: clamp the state, refresh Gamma -----
+    ## ----- accepted step: refresh the mask and Gamma -----
 
     def step_callback(self, t, q, u):
         la_t_dot = self.Gamma_inv @ self.outer_loop(t, q, u)
         self._free_last = self._free(q, la_t_dot)
+        # The bounds are enforced by the anti-windup mask in q_dot, which is
+        # part of the residual the solver integrates. This clamp is only
+        # cleanup: ScipyDAE runs step_callback as a solve_dae event, so the
+        # write-back of q into the solver state is not guaranteed.
         q[: self.nq] = np.clip(q[: self.nq], self.la_t_min, self.la_t_max)
 
         if self.gamma_fn is not None and t - self._last_gamma_check_t >= self.gamma_check_dt:
