@@ -1,6 +1,4 @@
 import numpy as np
-from jax import jit, vmap
-from jax import numpy as jnp
 
 from cardillo.rods import DiscreteRod
 

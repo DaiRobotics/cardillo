@@ -1,5 +1,3 @@
-import scipy as sp
-
 from cardillo.constraints import RigidConnection
 from cardillo.rods.force_line_distributed import Force_line_distributed
 
@@ -13,7 +11,6 @@ from cardillo.rods import (
 )
 from cardillo.system import System
 from cardillo.utility.coo_matrix import CooMatrix
-from cardillo.math import Log_SO3, Log_SO3_A, Exp_SO3_quat, Exp_SO3_quat_P
 
 import numpy as np
 
@@ -24,7 +21,8 @@ class Controller:
         rod,
         tendons: list[RodTendonKinematics],
         r_OP_traj=None,
-        Kp=0.0,
+        Kp_r=0.0,
+        Kp_p=0.0,
         name="controller",
     ) -> None:
         self.rod = rod
@@ -33,61 +31,38 @@ class Controller:
         self.nq = self.nla_tau = len(tendons)
         self.q0 = np.zeros(self.nq, dtype=np.float64)
 
-        self.Kp = Kp
-        self.dq_dla_t = None
+        self.Kp_r = Kp_r
+        self.Kp_p = Kp_p
+        self.dla_t_dy = np.zeros((self.nla_tau, 6), dtype=np.float64)
         self.r_OP_traj = lambda t: (
             self.rod.q0[-7:-4] if r_OP_traj is None else r_OP_traj
         )
 
     def q_dot(self, t, q, u):
-        if self.dq_dla_t is None:
-            return np.zeros(self.nq, dtype=np.float64)
-        q_tip = q[-7 - self.nla_tau :]
+        q_tip = q[-7 - self.nla_tau : -self.nla_tau]
         r_OP = q_tip[:3]
         p_IB = q_tip[3:7]
-        A_IB = Exp_SO3_quat(p_IB)
 
-        try:
-            A_IB_ref = self.A_IB_ref
-        except AttributeError:
-            A_IB_ref = self.A_IB_ref = A_IB
         r_OP_def = self.r_OP_traj(t)
 
-        A = A_IB_ref.T @ A_IB
-        psi = Log_SO3(A)
-        delta = np.concatenate([r_OP_def - r_OP, -psi])
+        e = np.concatenate([r_OP_def - r_OP, -p_IB[1:]])
 
-        dr_dla_t = self.dq_dla_t[:3]
-
-        dpsi_dA = Log_SO3_A(A)
-        dA_dp = (Exp_SO3_quat_P(p_IB).T @ A_IB_ref).T
-        # dA_dp = Exp_SO3_quat_P(p_IB)
-        dpsi_dp = np.einsum("ijk, jkl -> il", dpsi_dA, dA_dp)
-        dpsi_dla_t = dpsi_dp @ self.dq_dla_t[3:]
-
-        # return np.linalg.pinv(dr_dla_t) @ delta[:3] * self.Kp
-
-        # dpsi_dla_t[np.bitwise_and(dpsi_dla_t<1e-12, dpsi_dla_t>-1e-12)] = 0
-        dy_dla_t = np.concatenate([dr_dla_t, dpsi_dla_t])
-        dy_dla_t[3] = 0
-        delta[3] = 0
-        delta[3:] /= (
-            np.pi * 100 / 18
-        )  # scale the rotation error to be comparable to the position error
-        x, res, rnk, s = sp.linalg.lstsq(dy_dla_t, delta)
-        return x * self.Kp
-
-        return np.linalg.solve(np.concatenate([dr_dla_t, dpsi_dla_t]), delta) * self.Kp
+        e[:3] *= self.Kp_r
+        e[3:] *= self.Kp_p
+        return self.dla_t_dy @ e
 
     def q_dot_q(self, t, q, u):
-        coo = CooMatrix((self.nq, self._nq))
-        coo[:, -self.nla_tau - 7 : -self.nla_tau - 4] = np.linalg.pinv(
-            self.dq_dla_t[:3]
-        ) * (-self.Kp)
+        coo = self._q_dot_q_coo
+        coo[0, :, -self.nla_tau - 7 : -self.nla_tau - 4] = self.dla_t_dy[:, :3] * (
+            -self.Kp_r
+        )
+        coo[1, :, -self.nla_tau - 3 : -self.nla_tau] = self.dla_t_dy[:, 3:] * (
+            -self.Kp_p
+        )
         return coo
 
     def W_tau(self, t, q):
-        W_tau = CooMatrix((self._nu, self._nq))
+        W_tau = CooMatrix((self._nu, self.nla_tau))
         for i, td, qDOF, uDOF in zip(
             range(self.nla_tau), self.tendons, self._td_qDOF, self._td_uDOF
         ):
@@ -131,6 +106,8 @@ class Controller:
         self.uDOF = uDOF
         self._nq = len(self.qDOF)
         self._nu = len(self.uDOF)
+
+        self._q_dot_q_coo = CooMatrix((self.nq, self._nq))
 
 
 def gen_tdcr_renda2022(

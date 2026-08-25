@@ -10,25 +10,25 @@ from cardillo.solver import Newton, ScipyDAE
 from cardillo.visualization import Plotter
 from cardillo.math import quat2axis_angle, Exp_SO3_quat, Exp_SO3_quat_P, Log_SO3_A
 
-from cardillo_example_systems.tdcr_renda2022 import gen_tdcr_renda2022
+from cardillo_example_systems.tdcr_renda2022_dyn import gen_tdcr_renda2022
 
 ############
 # parameters
 ############
 G_ACCEL = 9.81 * 0
 rod_nelement = 29 * 2
-damping_ratio = 10e-2
-la_t_0 = np.array([0, 0, 0, 0, 0, 0], dtype=np.float64)
+damping_ratio = 1e-2
+la_t_0 = np.array([0, 0, 0, 1, 1, 1], dtype=np.float64) * 0
 # static solver
 n_load_steps = 6
 # dynamic solver
 dt = 1e-3
-t_sim = 45
+t_sim = 10
 rtol = 1.0e-3
 atol = 1.0e-6
 # controller
-Kp_r = 0.8
-Kp_p = 180 / np.pi * 1e-3 * 100
+Kp_r = np.diag([100, 5, 5])
+Kp_p = 180 / np.pi * 1e-3 * 100 * 0
 t_circle = 45
 t_spiral = t_circle / 2
 dt_jacobian = 1e-2
@@ -76,7 +76,7 @@ newton = Newton(
 )
 sol0_stat = newton.solve()
 
-q0_dyn = np.concatenate((sol0_stat.q[-1], la_t_0))
+q0_dyn = sol0_stat.q[-1]
 u0_dyn = sol0_stat.u[-1]
 system_dyn.set_new_initial_state(q0_dyn, u0_dyn)
 
@@ -85,62 +85,54 @@ system_dyn.set_new_initial_state(q0_dyn, u0_dyn)
 # controller
 ############
 def r_OP_traj(t):
+    ret = sol0_stat.q[-1, -7:-4].copy()
+    # ret *= 0.95
+    # return ret
+    ret[1] += ret[0] * 0.0
+    ret[2] += ret[0] * 0.0
+    ret[0] *= 0.99
+    return ret
     omg = 2 * np.pi / t_circle
     theta = omg * t
 
     if t < t_spiral:
         x = 0.58 - 0.28 * (1 - np.cos(np.pi * t / t_spiral)) / 2
-        r = 0.175 * (1 - np.cos(np.pi * t / t_spiral)) / 2
+        ret = 0.175 * (1 - np.cos(np.pi * t / t_spiral)) / 2
     else:
         x = 0.3
-        r = 0.175
-    return np.array([x, r * np.cos(theta), r * np.sin(theta)])
+        ret = 0.175
+    return np.array([x, ret * np.cos(theta), ret * np.sin(theta)])
 
 
-def compute_jacobian(t, q):
+def compute_force(t, q, u):
     t = float(t)
+    q_rod = q[rod_dyn.qDOF]
+    u_rod = u[rod_dyn.uDOF]
 
-    la_t = q[-nla_tau:]
-    # interpolation of la_tau for the static solver
-    for td, la in zip(tendons_stat, la_t):
-        td.la_tau = lambda t, q, u, la1=td.la_tau(1, None, None), la2=la: la1 + t * (
-            la2 - la1
-        )
-    # static soluton with warm start from the previous solution
-    sol = newton.solve(x0=newton.x[-1])
-    assert sol.success, f"Static solver failed to converge: {la_t}"
+    # return np.array([0, 0, 0, 0, 1, 0], dtype=np.float64)
+    r_OP_ref = r_OP_traj(t)
+    r_OP = q_rod[-7:-4]
+    v_P = u_rod[-6:-3]
 
-    # compute jacobian for the controller
-    q_stat = sol.q[-1, : system_stat.nq]
-    df_dx = newton.jac(newton.x[-1], 1)
-    df_dla_t = np.zeros((newton.nx, system_stat.nla_tau), dtype=np.float64)
-    df_dla_t[: system_stat.nu] = system_stat.W_tau(t, q_stat, format="Coo").toarray(
-        fix_size=True
-    )
-    dx_dla_t = scipy.sparse.linalg.spsolve(df_dx, -df_dla_t)
-    dq_dla_t = dx_dla_t[: system_stat.nq][-7:]
-    dy_dla_t = np.concatenate([dq_dla_t[:3], dq_dla_t[4:]])
-    return np.linalg.pinv(dy_dla_t, rcond=1e-6)
+    # try:
+    #     M_inv = self._M_inv
+    # except AttributeError:
+    M = rod_dyn.M(t, q_rod).tocsr()[-6:-3, -6:-3]
+    W_c = system_dyn.W_c(t, q, format="Coo")
+    la_c = system_dyn.la_c(t, q, u)
+    # la_c = la_c.reshape((rod_dyn.nelement, -1))
+    # la_c[:, 6:] = 0
+    # la_c = la_c.flatten()
+    h = system_dyn.h(t, q, u)[rod_dyn.uDOF][-6:-3]
+    W_tau = controller_dyn.W_tau(t, q).toarray(fix_size=True)[-6:-3, 3:]
 
-    # q_tip = q[-7 - nla_tau : -nla_tau]
-    q_tip = q_stat[-7:]
-    p_IB = q_tip[3:7]
-
-    A_IB = Exp_SO3_quat(p_IB)
-    A_IB_ref = np.eye(3)
-    A = A_IB_ref.T @ A_IB
-
-    dr_dla_t = dq_dla_t[:3]
-
-    dpsi_dA = Log_SO3_A(A)
-    dA_dp = (Exp_SO3_quat_P(p_IB).T @ A_IB_ref).T
-    # dA_dp = Exp_SO3_quat_P(p_IB)
-    dpsi_dp = np.einsum("ijk, jkl -> il", dpsi_dA, dA_dp)
-    dpsi_dla_t = dpsi_dp @ dq_dla_t[3:]
-
-    dy_dla_t = np.concatenate([dr_dla_t, dpsi_dla_t])
-    dla_t_dy = np.linalg.pinv(dy_dla_t, rcond=1e-3)
-    return dla_t_dy
+    Wla_c = (W_c.tocsr(fix_size=True) @ la_c)[rod_dyn.uDOF][-6:-3]
+    la_tau_comp = np.linalg.lstsq(W_tau, -(Wla_c + h * 1), rcond=1e-6)[0]
+    la_tau_feedback = np.linalg.lstsq(
+        W_tau, M @ ((Kp_r**2) @ (r_OP_ref - r_OP) + 2 * Kp_r @ (-v_P)), rcond=1e-6
+    )[0]
+    la_tau = la_tau_comp * 1 + la_tau_feedback * 1
+    return np.concatenate((np.zeros(3), la_tau))
 
 
 def wrap_step_callback(step_callback):
@@ -150,7 +142,7 @@ def wrap_step_callback(step_callback):
         q, u = step_callback(t, q, u)
         # update jacobian every dt_jacobian_update seconds
         if t - system_dyn.t_jac_last >= dt_jacobian:
-            controller_dyn.dla_t_dy = compute_jacobian(t, q)
+            controller_dyn._la_t = compute_force(t, q, u)
             system_dyn.t_jac_last = t
         return q, u
 
@@ -166,7 +158,6 @@ newton.verbose = False
 controller_dyn.Kp_r = Kp_r
 controller_dyn.Kp_p = Kp_p
 controller_dyn.r_OP_traj = r_OP_traj
-controller_dyn.dla_t_dy = compute_jacobian(0, q0_dyn)
 
 ######################
 # dynamical simulation
@@ -174,8 +165,10 @@ controller_dyn.dla_t_dy = compute_jacobian(0, q0_dyn)
 # set step callback to update the jacobian for the controller
 system_dyn.step_callback = wrap_step_callback(system_dyn.step_callback)
 
-solver = ScipyDAE(system_dyn, t1=t_sim, dt=dt, method="Radau", atol=atol, rtol=rtol)
-sol = solver.solve()
+solver_dyn = ScipyDAE(
+    system_dyn, t1=t_sim, dt=dt, method="Radau", atol=atol, rtol=rtol, max_step=1e-1
+)
+sol = solver_dyn.solve()
 
 
 ###############
