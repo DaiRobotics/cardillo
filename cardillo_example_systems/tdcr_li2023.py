@@ -27,23 +27,23 @@ class Controller:
         self.tendons = tendons
         self.name = name
         self.nq = self.nla_tau = len(tendons)
-        # tau(t) <-- r_OP(t), la_t(t), dr_OP_dla_t_inv(t)
-        self.ntau = 3 + self.nla_tau + 3 * self.nla_tau
+        self.ntau = 3 * 2
         self.q0 = np.zeros(self.nq, dtype=np.float64)
 
         self.Kp = Kp
+        self.dr_OP_dla_t_inv = np.zeros((self.nla_tau, 3))
 
     def q_dot(self, t, q, u):
         r_OP = q[-7 - self.nla_tau : -4 - self.nla_tau]
         tau = self.tau(t)
-        r_OP_des = tau[:3]
-        dr_OP_dla_t_inv = tau[3 + self.nla_tau :].reshape((self.nla_tau, 3))
-        return dr_OP_dla_t_inv @ (r_OP_des - r_OP) * self.Kp
+        r_OP_des, v_P_def = tau[:3], tau[3:6]
+        return self.dr_OP_dla_t_inv @ (v_P_def + (r_OP_des - r_OP) * self.Kp)
 
     def q_dot_q(self, t, q, u):
         coo = CooMatrix((self.nq, self._nq))
-        dr_OP_dla_t_inv = self.tau(t)[3 + self.nla_tau :].reshape((self.nla_tau, 3))
-        coo[:, -self.nla_tau - 7 : -self.nla_tau - 4] = dr_OP_dla_t_inv * (-self.Kp)
+        coo[:, -self.nla_tau - 7 : -self.nla_tau - 4] = self.dr_OP_dla_t_inv * (
+            -self.Kp
+        )
         return coo
 
     def W_tau(self, t, q):
@@ -76,7 +76,7 @@ class Controller:
         return np.zeros(self.ntau, dtype=np.float64)
 
     def la_tau(self, t, q, u):
-        return self.tau(t)[3 : 3 + self.nla_tau] + q[-self.nla_tau :]
+        return q[-self.nla_tau :]
 
     def assembler_callback(self):
         qDOF = self.rod.qDOF

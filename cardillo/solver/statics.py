@@ -246,6 +246,7 @@ class Newton:
                     la_c=self.x[: i + 1, self.split_x[1] : self.split_x[2]],
                     la_N=self.x[: i + 1, self.split_x[2] :],
                     success=False,
+                    solver=self,
                 )
 
             # solver step callback
@@ -270,6 +271,7 @@ class Newton:
             la_c=x[: i + 1, self.split_x[1] : self.split_x[2]],
             la_N=x[: i + 1, self.split_x[2] :],
             success=True,
+            solver=self,
         )
 
 
@@ -302,12 +304,14 @@ class Riks:
         scale_exponent=0.5,
         max_load_steps=int(1e4),
         options=SolverOptions(),
+        verbose=True,
     ):
         self.system = system
         self.options = options
         self.la_arc0 = la_arc0
         self.la_arc_span = la_arc_span
         self.max_load_steps = max_load_steps
+        self.verbose = verbose
 
         # initial arc-length parameter is not required in the first step and
         # will be computed later
@@ -353,7 +357,6 @@ class Riks:
         self.q0 = self.system.q0
         self.la_c0 = self.system.la_c0
         self.la_g0 = self.system.la_g0
-        self.la_arc0 = la_arc0
         self.la_N0 = self.system.la_N0
         self.u0 = np.zeros(system.nu)  # statics
 
@@ -371,7 +374,8 @@ class Riks:
         # All other ds values will be modified according to the number of used Newton steps,
         # see https://scicomp.stackexchange.com/questions/28137/initialize-arc-length-control-in-riks-method
         ####################################################################################################
-        print(f"solve equilibrium for given initial la_arc0")
+        if verbose:
+            print(f"solve equilibrium for given initial la_arc0")
 
         def fun(x):
             x = np.concatenate((x, [la_arc0]))
@@ -390,7 +394,8 @@ class Riks:
         self.x0_bar = np.concatenate((sol.x, [la_arc0]))
         self.ds = self.a(self.x0_bar) ** 0.5
         assert self.ds > 0, "initial ds is zero"
-        print(f"initial ds: {self.ds:2.4e}")
+        if verbose:
+            print(f"initial ds: {self.ds:2.4e}")
 
     def a(self, x):
         """The most primitive arc-length equation restricts the change of all
@@ -420,15 +425,19 @@ class Riks:
         # compute quantities required for Jacobian
         self.W_g = self.system.W_g(t, q, format="csr")
         self.W_c = self.system.W_c(t, q, format="csr")
+        self.W_tau = self.system.W_tau(t, q, format="csr")
         self.W_N = self.system.W_N(t, q, format="csr")
         self.g_N = self.system.g_N(t, q)
         self.h = self.system.h(t, q, self.u0)
         self.g = self.system.g(t, q)
+        la_tau = self.system.la_tau(t, q, self.u0)
 
         # build residual
         R = np.zeros_like(x)
         R = x.copy()
-        R[: self.split_residual[0]] = self.h + self.W_c @ la_c + self.W_g @ la_g
+        R[: self.split_residual[0]] = (
+            self.h + self.W_c @ la_c + self.W_g @ la_g + self.W_tau @ la_tau
+        )
         R[self.split_residual[0] : self.split_residual[1]] = self.system.c(
             t, q, self.u0, la_c
         )
@@ -451,6 +460,7 @@ class Riks:
             + self.system.Wla_c_q(t, q, la_c)
             + self.system.Wla_g_q(t, q, la_g)
             + self.system.Wla_N_q(t, q, la_N)
+            + self.system.Wla_tau_q(t, q, self.u0)
         )
         c_q = self.system.c_q(t, q, self.u0, la_c)
         c_la_c = self.system.c_la_c()
@@ -477,7 +487,11 @@ class Riks:
         eps = self.eps
         Wla_g_t = (self.system.W_g(t + eps, q) @ la_g - self.W_g @ la_g) / eps
         h_t = (self.system.h(t + eps, q, self.u0) - self.h) / eps
-        Ru_t = h_t + Wla_g_t
+        Wla_tau_t = (
+            self.system.W_tau(t + eps, q) @ self.system.la_tau(t + eps, q, self.u0)
+            - self.W_tau @ self.system.la_tau(t, q, self.u0)
+        ) / eps
+        Ru_t = h_t + Wla_g_t + Wla_tau_t
         g_t = (self.system.g(t + eps, q) - self.g) / eps
 
         # derivative of the arc length equation
@@ -508,8 +522,9 @@ class Riks:
         xk1 = self.x0_bar.copy()  # initialize such that Jacobian is regular!
 
         # progress bar
-        pbar = tqdm(total=100, leave=True)
-        i0 = 0
+        if self.verbose:
+            pbar = tqdm(total=100, leave=True)
+            i0 = 0
         load_step = 0
         while (
             xk1[-1] >= self.la_arc_span[0]
@@ -560,18 +575,25 @@ class Riks:
                 * (la_arc_[0] - self.la_arc_span[0])
                 / (self.la_arc_span[1] - self.la_arc_span[0])
             )
-            pbar.update(i1 - i0)
-            pbar.set_description(
-                f"la_arc: {self.la_arc_span[0]:0.2e} <= {la_arc_[0]:0.2e} <= {self.la_arc_span[1]:0.2e}; error: {sol.error:0.2e}; iter: {sol.nit}"
-            )
-            i0 = i1
+            if self.verbose:
+                pbar.update(min(i1, 100) - i0)
+                pbar.set_description(
+                    f"la_arc: {self.la_arc_span[0]:0.2e} <= {la_arc_[0]:0.2e} <= {self.la_arc_span[1]:0.2e}; error: {sol.error:0.2e}; iter: {sol.nit}"
+                )
+                i0 = i1
+
+        if self.verbose:
+            pbar.close()
 
         # return solution object
         return Solution(
             system=self.system,
             t=np.asarray(la_arc),
             q=np.asarray(q),
+            u=np.zeros((len(q), len(self.u0))),
             la_c=np.asarray(la_c),
             la_g=np.asarray(la_g),
             la_N=np.asarray(la_N),
+            success=sol.success,
+            solver=self,
         )
