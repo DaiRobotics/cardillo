@@ -36,8 +36,8 @@ class Controller:
     def q_dot(self, t, q, u):
         r_OP = q[-7 - self.nla_tau : -4 - self.nla_tau]
         tau = self.tau(t)
-        r_OP_des, v_P_def = tau[:3], tau[3:6]
-        return self.dr_OP_dla_t_inv @ (v_P_def + (r_OP_des - r_OP) * self.Kp)
+        r_OP_des, v_P_des = tau[:3], tau[3:6]
+        return self.dr_OP_dla_t_inv @ (v_P_des + (r_OP_des - r_OP) * self.Kp)
 
     def q_dot_q(self, t, q, u):
         coo = CooMatrix((self.nq, self._nq))

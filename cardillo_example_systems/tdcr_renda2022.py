@@ -20,7 +20,6 @@ class Controller:
         self,
         rod,
         tendons: list[RodTendonKinematics],
-        r_OP_traj=None,
         Kp_r=0.0,
         Kp_p=0.0,
         name="controller",
@@ -29,27 +28,26 @@ class Controller:
         self.tendons = tendons
         self.name = name
         self.nq = self.nla_tau = len(tendons)
+        self.ntau = 3 * 2
         self.q0 = np.zeros(self.nq, dtype=np.float64)
 
         self.Kp_r = Kp_r
         self.Kp_p = Kp_p
         self.dla_t_dy = np.zeros((self.nla_tau, 6), dtype=np.float64)
-        self.r_OP_traj = lambda t: (
-            self.rod.q0[-7:-4] if r_OP_traj is None else r_OP_traj
-        )
 
     def q_dot(self, t, q, u):
         q_tip = q[-7 - self.nla_tau : -self.nla_tau]
         r_OP = q_tip[:3]
         p_IB = q_tip[3:7]
 
-        r_OP_def = self.r_OP_traj(t)
+        tau = self.tau(t)
+        r_OP_des, v_P_des = tau[:3], tau[3:6]
 
-        e = np.concatenate([r_OP_def - r_OP, -p_IB[1:]])
+        e = np.concatenate([r_OP_des - r_OP, -p_IB[1:]])
 
         e[:3] *= self.Kp_r
         e[3:] *= self.Kp_p
-        return self.dla_t_dy @ e
+        return self.dla_t_dy @ (np.concatenate((v_P_des, np.zeros(3))) + e)
 
     def q_dot_q(self, t, q, u):
         coo = self._q_dot_q_coo
@@ -86,6 +84,9 @@ class Controller:
 
     def Wla_tau_u(self, t, q, u):
         return None
+
+    def tau(self, t):
+        return np.zeros(self.ntau, dtype=np.float64)
 
     def la_tau(self, t, q, u):
         return q[-self.nla_tau :]

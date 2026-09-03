@@ -135,6 +135,7 @@ if __name__ == "__main__":
     # static solver
     n_load_steps = 10
     solver_stat = "newton"
+    la_arc0 = 0.1
     # dynamic solver
     t_sim = 25
     dt_sim = 1e-3
@@ -159,36 +160,36 @@ if __name__ == "__main__":
     tendons_stat = ret["tendons"]
     rod_gravity_stat = ret["rod_gravity"]
 
-    # # #################################################
-    la_t1 = np.array([6.47, 7.59, 7.1, 5.98])
-    la_t2 = np.array([5.31, 6.61, 5.85, 4.54])
+    # #################################################
+    # la_t1 = np.array([6.47, 7.59, 7.1, 5.98])
+    # la_t2 = np.array([5.31, 6.61, 5.85, 4.54])
 
-    newton = Newton(
-        system_stat,
-        n_load_steps=10,
-    )
-    print("============")
-    sol_stat, _, _ = forward_statics(la_t1, verbose=True, solver="newton")
+    # newton = Newton(
+    #     system_stat,
+    #     n_load_steps=10,
+    # )
+    # print("============")
+    # sol_stat, _, _ = forward_statics(la_t1, verbose=True, solver="newton")
 
-    system_stat.set_new_initial_state(sol_stat.q[-1], sol_stat.u[-1])
-    riks = Riks(system_stat, la_arc0=0.05, compute_init_ds=False)
+    # system_stat.set_new_initial_state(sol_stat.q[-1], sol_stat.u[-1])
+    # riks = Riks(system_stat, la_arc0=0.05, compute_init_ds=False)
 
-    # full gravity for jacobian computation
-    rod_gravity_stat.force = lambda t, xi, f=rod_gravity_stat.force: f(
-        sol_stat.t[-1], xi
-    )
+    # # full gravity for jacobian computation
+    # rod_gravity_stat.force = lambda t, xi, f=rod_gravity_stat.force: f(
+    #     sol_stat.t[-1], xi
+    # )
 
-    sol_stat2, _, _ = forward_statics(
-        la_t2, sol_last=sol_stat, verbose=True, solver="riks"
-    )
-    print(sol_stat2.t)
+    # sol_stat2, _, _ = forward_statics(
+    #     la_t2, sol_last=sol_stat, verbose=True, solver="riks"
+    # )
+    # print(sol_stat2.t)
 
-    from cardillo.visualization.vtk_render2 import Plotter
+    # from cardillo.visualization.vtk_render2 import Plotter
 
-    plt = Plotter(system_stat, window_size=(960, 540))
-    plt.render_solution(sol_stat2, speed_up=0.3)
+    # plt = Plotter(system_stat, window_size=(960, 540))
+    # plt.render_solution(sol_stat2, speed_up=0.3)
 
-    exit()
+    # exit()
     # #################################################
 
     # solve static problem
@@ -200,7 +201,7 @@ if __name__ == "__main__":
     sol_stat, _, _ = forward_statics(la_t_stat, verbose=True, solver="newton")
 
     system_stat.set_new_initial_state(sol_stat.q[-1], sol_stat.u[-1])
-    riks = Riks(system_stat, la_arc0=0.1, compute_init_ds=False)
+    riks = Riks(system_stat, la_arc0=la_arc0, compute_init_ds=False)
 
     rod_gravity_stat.force = lambda t, xi, f=rod_gravity_stat.force: f(
         sol_stat.t[-1], xi
