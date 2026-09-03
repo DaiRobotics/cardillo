@@ -28,10 +28,7 @@ class Newton:
         self.system = system
         self.options = options
         self.verbose = verbose
-        self.load_steps = np.linspace(0, 1, n_load_steps + 1)
-        self.nt = len(self.load_steps)
 
-        self.len_t = len(str(self.nt))
         self.len_maxIter = len(str(self.options.newton_max_iter))
 
         # other dimensions
@@ -57,9 +54,10 @@ class Newton:
         self.nx = len(x0)
         self.u0 = np.zeros(system.nu)  # zero velocities as system is static
 
+        self.n_load_steps = None
+        self.reset(x0, n_load_steps)
+
         # memory allocation
-        self.x = np.zeros((self.nt, self.nx), dtype=float)
-        self.x[0] = x0
         self._W_g_coo = CooMatrix((system.nu, system.nla_g), manual_sync=True)
         self._W_c_coo = CooMatrix((system.nu, system.nla_c), manual_sync=True)
         self._W_tau_coo = CooMatrix((system.nu, system.nla_tau), manual_sync=True)
@@ -77,6 +75,20 @@ class Newton:
         self._h_coo = CooMatrix((1, system.nu), manual_sync=True)
         self._jac_coo = CooMatrix((self.nx, self.nx), manual_sync=True)
         self._F_coo = CooMatrix((1, self.nx), manual_sync=True)
+
+    def reset(self, x0=None, n_load_steps=None):
+        if x0 is None:
+            x0 = self.x[0]
+
+        if n_load_steps is not None and n_load_steps != self.n_load_steps:
+            self.n_load_steps = n_load_steps
+            self.load_steps = np.linspace(0, 1, n_load_steps + 1)
+            self.nt = len(self.load_steps)
+            self.x = np.zeros((self.nt, self.nx), dtype=float)
+            self.len_t = len(str(self.nt))
+            self.len_t = len(str(self.nt))
+
+        self.x[0] = x0
 
     def fun(self, x, t):
         t = float(t)
@@ -164,6 +176,9 @@ class Newton:
         # https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_array.html#scipy.sparse.csr_array
         if self.nla_N:
             self._jac_coo = CooMatrix((self.nx, self.nx), manual_sync=True)
+            raise NotImplementedError(
+                "CooMatrix allocation not tested yet for contact problem"
+            )
         jac = self._jac_coo
         jac["W_g", :r0, c0:c1] = self._W_g_coo
         jac["W_c", :r0, c1:c2] = self._W_c_coo
@@ -209,13 +224,11 @@ class Newton:
             f" error {error:.4e}"
         )
 
-    def solve(self, x0=None):
+    def solve(self):
         pbar = range(0, self.nt)
         if self.verbose:
             pbar = tqdm(pbar, leave=True)
-        # manually set initial guess for first load step if provided
-        if x0 is not None:
-            self.x[0] = x0
+
         for i in pbar:
             sol = fsolve(
                 self.fun,
@@ -305,13 +318,15 @@ class Riks:
         max_load_steps=int(1e4),
         options=SolverOptions(),
         verbose=True,
+        compute_init_ds=True,
     ):
         self.system = system
         self.options = options
-        self.la_arc0 = la_arc0
         self.la_arc_span = la_arc_span
         self.max_load_steps = max_load_steps
         self.verbose = verbose
+
+        self.nla_N = system.nla_N
 
         # initial arc-length parameter is not required in the first step and
         # will be computed later
@@ -354,19 +369,60 @@ class Riks:
         )[:-1]
 
         # initial
-        self.q0 = self.system.q0
-        self.la_c0 = self.system.la_c0
-        self.la_g0 = self.system.la_g0
-        self.la_N0 = self.system.la_N0
         self.u0 = np.zeros(system.nu)  # statics
 
         # initial values for generalized coordinates, lagrange multipliers and force scaling
-        self.xk = np.concatenate(
-            (self.q0, self.la_c0, self.la_g0, self.la_N0, np.array([0]))
+        x0 = np.concatenate(
+            (system.q0, system.la_c0, system.la_g0, system.la_N0, np.array([0]))
         )
-        self.x0_bar = np.concatenate(
-            (self.q0, self.la_c0, self.la_g0, self.la_N0, np.array([la_arc0]))
-        )
+        self.nx = len(x0)
+
+        self.reset(x0=x0, la_arc0=la_arc0, compute_init_ds=compute_init_ds)
+
+        # memory allocation
+        self._W_g_coo = CooMatrix((system.nu, system.nla_g), manual_sync=True)
+        self._W_g2_coo = CooMatrix((system.nu, system.nla_g), manual_sync=True)
+        self._W_c_coo = CooMatrix((system.nu, system.nla_c), manual_sync=True)
+        self._W_tau_coo = CooMatrix((system.nu, system.nla_tau), manual_sync=True)
+        self._W_tau2_coo = CooMatrix((system.nu, system.nla_tau), manual_sync=True)
+        self._W_N_coo = CooMatrix((system.nu, system.nla_N), manual_sync=True)
+        self._h_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self._Wla_g_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self._Wla_c_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self._Wla_tau_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self._c_q_coo = CooMatrix((system.nla_c, system.nq), manual_sync=True)
+        self._g_q_coo = CooMatrix((system.nla_g, system.nq), manual_sync=True)
+        self._g_S_q_coo = CooMatrix((system.nla_S, system.nq), manual_sync=True)
+        self._Wla_N_q_coo = CooMatrix((system.nu, system.nq), manual_sync=True)
+        self._g_N_q_coo = CooMatrix((system.nla_N, system.nq), manual_sync=True)
+        self._c_coo = CooMatrix((1, system.nla_c), manual_sync=True)
+        self._h_coo = CooMatrix((1, system.nu), manual_sync=True)
+        self._J_coo = CooMatrix((self.nx, self.nx), manual_sync=True)
+        self._R_coo = CooMatrix((1, self.nx), manual_sync=True)
+
+    def reset(self, x0=None, la_arc0=None, compute_init_ds=True):
+        if x0 is None:
+            x0 = self.x0
+        else:
+            x0[-1] = 0
+            self.x0 = x0
+
+        if la_arc0 is None:
+            la_arc0 = self.la_arc0
+        else:
+            self.la_arc0 = la_arc0
+
+        q0, la_c0, la_g0, la_N0, _ = self._split_x(x0)
+        self.q0 = q0
+        self.la_c0 = la_c0
+        self.la_g0 = la_g0
+        self.la_N0 = la_N0
+
+        self.xk = np.concatenate((q0, la_c0, la_g0, la_N0, np.array([0])))
+        self.x0_bar = np.concatenate((q0, la_c0, la_g0, la_N0, np.array([la_arc0])))
+
+        if not compute_init_ds:
+            return
 
         ####################################################################################################
         # Solve linearized system for fixed external force using Newtons method.
@@ -374,7 +430,7 @@ class Riks:
         # All other ds values will be modified according to the number of used Newton steps,
         # see https://scicomp.stackexchange.com/questions/28137/initialize-arc-length-control-in-riks-method
         ####################################################################################################
-        if verbose:
+        if self.verbose:
             print(f"solve equilibrium for given initial la_arc0")
 
         def fun(x):
@@ -385,7 +441,7 @@ class Riks:
             x = np.concatenate((x, [la_arc0]))
             return self.J(x)[:-1, :-1]
 
-        sol = fsolve(fun, self.x0_bar[:-1], jac=jac, options=options)
+        sol = fsolve(fun, self.x0_bar[:-1], jac=jac, options=self.options)
         assert (
             sol.success
         ), "solving for initial arc-length parameter 'ds' did not converge => chose another 'la_arc0'"
@@ -394,27 +450,33 @@ class Riks:
         self.x0_bar = np.concatenate((sol.x, [la_arc0]))
         self.ds = self.a(self.x0_bar) ** 0.5
         assert self.ds > 0, "initial ds is zero"
-        if verbose:
+        if self.verbose:
             print(f"initial ds: {self.ds:2.4e}")
+
+    def _split_x(self, x):
+        c0, c1, c2, c3 = self.split_unknowns
+        # extract generalized coordinates, Lagrange multipliers and arc-length parameter
+        q, la_c, la_g, la_N, t = x[:c0], x[c0:c1], x[c1:c2], x[c2:c3], x[c3]
+        return q, la_c, la_g, la_N, t
 
     def a(self, x):
         """The most primitive arc-length equation restricts the change of all
         generalized coordinates `qn1` w.r.t. the last converged Newton step `qn`."""
-        qn = np.array_split(self.xk, self.split_unknowns)[0]
-        qn1 = np.array_split(x, self.split_unknowns)[0]
+        qn = self._split_x(self.xk)[0]
+        qn1 = self._split_x(x)[0]
         dq = qn1 - qn
         return dq @ dq
 
     def a_q(self, x):
-        qn = np.array_split(self.xk, self.split_unknowns)[0]
-        qn1 = np.array_split(x, self.split_unknowns)[0]
+        qn = self._split_x(self.xk)[0]
+        qn1 = self._split_x(x)[0]
         dq = qn1 - qn
         return 2 * dq
 
     def R(self, x):
         # extract generalized coordinates, Lagrange multipliers and arc-length parameter
-        q, la_c, la_g, la_N, t = np.array_split(x, self.split_unknowns)
-        t = t[0]
+        q, la_c, la_g, la_N, t = self._split_x(x)
+        t = float(t)
 
         # evaluate all functions with t = la_arc
         # - this requires the external force that should be scaled to be of the form
@@ -423,14 +485,21 @@ class Riks:
         #   g = g(t, q)
 
         # compute quantities required for Jacobian
-        self.W_g = self.system.W_g(t, q, format="csr")
-        self.W_c = self.system.W_c(t, q, format="csr")
-        self.W_tau = self.system.W_tau(t, q, format="csr")
-        self.W_N = self.system.W_N(t, q, format="csr")
-        self.g_N = self.system.g_N(t, q)
+        W_g = self._W_g_coo = self.system.W_g(t, q, format="Coo", coo=self._W_g_coo)
+        W_c = self._W_c_coo = self.system.W_c(t, q, format="Coo", coo=self._W_c_coo)
+        W_tau = self._W_tau_coo = self.system.W_tau(
+            t, q, format="Coo", coo=self._W_tau_coo
+        )
         self.h = self.system.h(t, q, self.u0)
         self.g = self.system.g(t, q)
         la_tau = self.system.la_tau(t, q, self.u0)
+
+        W_g.manual_sync()
+        W_c.manual_sync()
+        W_tau.manual_sync()
+        self.W_g = W_g.tocsr(fix_size=True)
+        self.W_c = W_c.tocsr(fix_size=True)
+        self.W_tau = W_tau.tocsr(fix_size=True)
 
         # build residual
         R = np.zeros_like(x)
@@ -443,41 +512,61 @@ class Riks:
         )
         R[self.split_residual[1] : self.split_residual[2]] = self.g
         R[self.split_residual[2] : self.split_residual[3]] = self.system.g_S(t, q)
-        R[self.split_residual[3] : self.split_residual[4]] = np.minimum(la_N, self.g_N)
+
+        if self.nla_N:
+            self.g_N = self.system.g_N(t, q)
+            R[self.split_residual[3] : self.split_residual[4]] = np.minimum(
+                la_N, self.g_N
+            )
+
         R[-1] = self.a(x) - self.ds**2
 
         return R
 
     def J(self, x):
+        c0, c1, c2, c3 = self.split_unknowns
+        r0, r1, r2, r3, r4 = self.split_residual
         # extract generalized coordinates, Lagrange multipliers and arc-length parameter
-        q, la_c, la_g, la_N, t = np.array_split(x, self.split_unknowns)
-        t = t[0]
+        q, la_c, la_g, la_N, t = self._split_x(x)
+        t = float(t)
 
         # evaluate additionally required quantites for computing the jacobian
         # coo is used for efficient bmat
-        K = (
-            self.system.h_q(t, q, self.u0)
-            + self.system.Wla_c_q(t, q, la_c)
-            + self.system.Wla_g_q(t, q, la_g)
-            + self.system.Wla_N_q(t, q, la_N)
-            + self.system.Wla_tau_q(t, q, self.u0)
+        h_q = self._h_q_coo = self.system.h_q(
+            t, q, self.u0, format="Coo", coo=self._h_q_coo
         )
-        c_q = self.system.c_q(t, q, self.u0, la_c)
+        c_q = self._c_q_coo = self.system.c_q(
+            t, q, self.u0, la_c, format="Coo", coo=self._c_q_coo
+        )
+        Wla_g_q = self._Wla_g_q_coo = self.system.Wla_g_q(
+            t, q, la_g, format="Coo", coo=self._Wla_g_q_coo
+        )
+        Wla_c_q = self._Wla_c_q_coo = self.system.Wla_c_q(
+            t, q, la_c, format="Coo", coo=self._Wla_c_q_coo
+        )
+        Wla_tau_q = self._Wla_tau_q_coo = self.system.Wla_tau_q(
+            t, q, self.u0, format="Coo", coo=self._Wla_tau_q_coo
+        )
+        g_q = self._g_q_coo = self.system.g_q(t, q, format="Coo", coo=self._g_q_coo)
+        g_S_q = self._g_S_q_coo = self.system.g_S_q(
+            t, q, format="Coo", coo=self._g_S_q_coo
+        )
         c_la_c = self.system.c_la_c()
-        g_q = self.system.g_q(t, q)
-        g_S_q = self.system.g_S_q(t, q)
 
-        # note: csr_matrix is best for row slicing, see
-        # https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_array.html#scipy.sparse.csr_array
-        g_N_q = self.system.g_N_q(t, q, format="csr")
+        if self.nla_N:
+            Wla_N_q = self.system.Wla_N_q(t, q, la_N)
 
-        Rla_N_q = lil_array((self.system.nla_N, self.system.nq), dtype=float)
-        Rla_N_la_N = lil_array((self.system.nla_N, self.system.nla_N), dtype=float)
-        for i in range(self.system.nla_N):
-            if la_N[i] < self.g_N[i]:
-                Rla_N_la_N[i, i] = 1.0
-            else:
-                Rla_N_q[i] = g_N_q[i]
+            # note: csr_matrix is best for row slicing, see
+            # https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_array.html#scipy.sparse.csr_array
+            g_N_q = self.system.g_N_q(t, q, format="csr")
+
+            Rla_N_q = lil_array((self.system.nla_N, self.system.nq), dtype=float)
+            Rla_N_la_N = lil_array((self.system.nla_N, self.system.nla_N), dtype=float)
+            for i in range(self.system.nla_N):
+                if la_N[i] < self.g_N[i]:
+                    Rla_N_la_N[i, i] = 1.0
+                else:
+                    Rla_N_q[i] = g_N_q[i]
 
         # note: We use finite differences to compute the derivatives w.r.t.
         # to the arc-length parameter. Hence, we do not have to specify here
@@ -485,26 +574,71 @@ class Riks:
         # For displacement based approaches, we simply add a corresponding
         # bilateral constraint g(t, q).
         eps = self.eps
-        Wla_g_t = (self.system.W_g(t + eps, q) @ la_g - self.W_g @ la_g) / eps
+
+        W_g2 = self._W_g2_coo = self.system.W_g(
+            t + eps, q, format="Coo", coo=self._W_g2_coo
+        )
+        W_g2.manual_sync()
+
+        W_tau2 = self._W_tau2_coo = self.system.W_tau(
+            t + eps, q, format="Coo", coo=self._W_tau2_coo
+        )
+        W_tau2.manual_sync()
+
         h_t = (self.system.h(t + eps, q, self.u0) - self.h) / eps
+        Wla_g_t = (W_g2.tocsr(fix_size=True) @ la_g - self.W_g @ la_g) / eps
         Wla_tau_t = (
-            self.system.W_tau(t + eps, q) @ self.system.la_tau(t + eps, q, self.u0)
+            W_tau2.tocsr(fix_size=True) @ self.system.la_tau(t + eps, q, self.u0)
             - self.W_tau @ self.system.la_tau(t, q, self.u0)
         ) / eps
-        Ru_t = h_t + Wla_g_t + Wla_tau_t
         g_t = (self.system.g(t + eps, q) - self.g) / eps
 
         # derivative of the arc length equation
         a_q = self.a_q(x)
 
-        # fmt: off
-        return bmat([[      K, self.W_c, self.W_g,   self.W_N, Ru_t[:, None]], 
-                     [    c_q,   c_la_c,     None,       None,          None],
-                     [    g_q,     None,     None,       None,  g_t[:, None]],
-                     [  g_S_q,     None,     None,       None,          None],
-                     [Rla_N_q,     None,     None, Rla_N_la_N,          None],
-                     [    a_q,     None,     None,       None,          None]], format="csc")
-        # fmt: on
+        if self.nla_N:
+            self._J_coo = CooMatrix((self.nx, self.nx), manual_sync=True)
+            raise NotImplementedError(
+                "CooMatrix allocation not tested yet for contact problem"
+            )
+
+        J = self._J_coo
+        J["h_q", :r0, :c0] = h_q
+        J["Wla_c_q", :r0, :c0] = Wla_c_q
+        J["Wla_g_q", :r0, :c0] = Wla_g_q
+
+        J["Wla_tau_q", :r0, :c0] = Wla_tau_q
+        J["W_c", :r0, c0:c1] = self._W_c_coo
+        J["W_g", :r0, c1:c2] = self._W_g_coo
+
+        # Ru_t = h_t + Wla_g_t + Wla_tau_t
+        J["h_t", :r0, c3:] = h_t
+        J["Wla_g_t", :r0, c3:] = Wla_g_t
+        J["Wla_tau_t", :r0, c3:] = Wla_tau_t
+
+        J["c_q", r0:r1, :c0] = c_q
+        J["c_la_c", r0:r1, c0:c1] = c_la_c
+
+        J["g_q", r1:r2, :c0] = g_q
+        J["g_t", r1:r2, c3:] = g_t[:, None]
+        J["g_S_q", r2:r3, :c0] = g_S_q
+
+        if self.nla_N:
+            J["Wla_N_q", :r0, :c0] = Wla_N_q
+            J["W_N", :r0, c2:c3] = self.system.W_N(t, q, format="csr")
+            J["Rla_N_q", r3:r4, :c0] = Rla_N_q
+            J["Rla_N_la_N", r3:r4, c2:c3] = Rla_N_la_N
+
+        J["a_q", r4:, :c0] = a_q
+
+        J.manual_sync()
+        return J.tocsc(fix_size=True)
+        # return bmat([[      K, self.W_c, self.W_g,   self.W_N, Ru_t[:, None]],
+        #              [    c_q,   c_la_c,     None,       None,          None],
+        #              [    g_q,     None,     None,       None,  g_t[:, None]],
+        #              [  g_S_q,     None,     None,       None,          None],
+        #              [Rla_N_q,     None,     None, Rla_N_la_N,          None],
+        #              [    a_q,     None,     None,       None,          None]], format="csc")
 
     def solve(self):
         # count number of force increments to get first increment with tangential predictor
@@ -562,23 +696,23 @@ class Riks:
             self.xk = xk1.copy()
 
             # append solutions to lists
-            q_, la_c_, la_g_, la_N_, la_arc_ = np.array_split(xk1, self.split_unknowns)
+            q_, la_c_, la_g_, la_N_, la_arc_ = self._split_x(xk1)
             q.append(q_)
             la_c.append(la_c_)
             la_g.append(la_g_)
             la_N.append(la_N_)
-            la_arc.append(la_arc_[0])
+            la_arc.append(la_arc_)
 
             # update progress bar
             i1 = int(
                 100
-                * (la_arc_[0] - self.la_arc_span[0])
+                * (la_arc_ - self.la_arc_span[0])
                 / (self.la_arc_span[1] - self.la_arc_span[0])
             )
             if self.verbose:
                 pbar.update(min(i1, 100) - i0)
                 pbar.set_description(
-                    f"la_arc: {self.la_arc_span[0]:0.2e} <= {la_arc_[0]:0.2e} <= {self.la_arc_span[1]:0.2e}; error: {sol.error:0.2e}; iter: {sol.nit}"
+                    f"la_arc: {self.la_arc_span[0]:0.2e} <= {la_arc_:0.2e} <= {self.la_arc_span[1]:0.2e}; error: {sol.error:0.2e}; iter: {sol.nit}"
                 )
                 i0 = i1
 
