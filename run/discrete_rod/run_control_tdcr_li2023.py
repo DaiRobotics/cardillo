@@ -26,15 +26,14 @@ def forward_statics(la_t, sol_last=None, verbose=False, solver="riks"):
         for td, la0, la1 in zip(tendons_stat, la_t0, la_t):
             td.la_tau = lambda t, q, u, la0=la0, la1=la1: la0 + (la1 - la0) * t
         if solver == "riks":
-            if sol_last is not None:
-                system_stat.set_new_initial_state(sol_last.q[-1], sol_last.u[-1])
-            # TODO: prevent repeatly initializiing the Riks solver
-            riks = Riks(system_stat, la_arc0=0.1, verbose=verbose)
+            riks.verbose = verbose
+            riks.reset(x0=riks.xk)
             sol = riks.solve()
         elif solver == "newton":
             newton.verbose = verbose
             x0 = newton.x[-1] if sol_last is not None else None
-            sol = newton.solve(x0=x0)
+            newton.reset(x0=x0)
+            sol = newton.solve()
         else:
             raise ValueError(f"Solver {solver} not supported. Use 'newton' or 'riks'.")
 
@@ -115,7 +114,7 @@ def wrap_step_callback(step_callback):
         if t - system_dyn.t_jac_last >= dt_jacobian:
             la_t = system_dyn.la_tau(t, q, u)
             sol_last, r_OP, dr_OP_dla_t = forward_statics(
-                la_t, sol_last=sol_last, verbose=False, solver="riks"
+                la_t, sol_last=sol_last, verbose=False, solver=solver_stat
             )
 
             newton.t_pred.append(t)
@@ -129,12 +128,13 @@ def wrap_step_callback(step_callback):
 
 if __name__ == "__main__":
     # ---- simulation setup ----
-    G_ACCEL = 9.81
+    G_ACCEL = 9.81 * 1
     rod_nelement = 12
     damping_ratio = 5e-2
     la_t_stat = np.array([0, 0, 0, 0])
     # static solver
     n_load_steps = 10
+    solver_stat = "newton"
     # dynamic solver
     t_sim = 25
     dt_sim = 1e-3
@@ -159,28 +159,36 @@ if __name__ == "__main__":
     tendons_stat = ret["tendons"]
     rod_gravity_stat = ret["rod_gravity"]
 
-    # #################################################
-    # la_t1 = np.array([6.47, 7.59, 7.1, 5.98])
-    # la_t2 = np.array([5.31, 6.61, 5.85, 4.54])
+    # # #################################################
+    la_t1 = np.array([6.47, 7.59, 7.1, 5.98])
+    la_t2 = np.array([5.31, 6.61, 5.85, 4.54])
 
-    # newton = Newton(
-    #     system_stat,
-    #     n_load_steps=10,
-    # )
-    # print("============")
-    # sol_stat, _, _ = forward_statics(la_t1, verbose=True, solver="newton")
+    newton = Newton(
+        system_stat,
+        n_load_steps=10,
+    )
+    print("============")
+    sol_stat, _, _ = forward_statics(la_t1, verbose=True, solver="newton")
 
-    # # full gravity for jacobian computation
-    # rod_gravity_stat.force = lambda t, xi, f=rod_gravity_stat.force: f(sol_stat.t[-1], xi)
+    system_stat.set_new_initial_state(sol_stat.q[-1], sol_stat.u[-1])
+    riks = Riks(system_stat, la_arc0=0.05, compute_init_ds=False)
 
-    # sol_stat2, _, _ = forward_statics(la_t2, sol_last=sol_stat, verbose=True, solver="newton")
-    # print(sol_stat2.t)
+    # full gravity for jacobian computation
+    rod_gravity_stat.force = lambda t, xi, f=rod_gravity_stat.force: f(
+        sol_stat.t[-1], xi
+    )
 
-    # from cardillo.visualization.vtk_render2 import Plotter
-    # plt = Plotter(system_stat, window_size=(960, 540))
-    # plt.render_solution(sol_stat2, speed_up=0.3)
+    sol_stat2, _, _ = forward_statics(
+        la_t2, sol_last=sol_stat, verbose=True, solver="riks"
+    )
+    print(sol_stat2.t)
 
-    # exit()
+    from cardillo.visualization.vtk_render2 import Plotter
+
+    plt = Plotter(system_stat, window_size=(960, 540))
+    plt.render_solution(sol_stat2, speed_up=0.3)
+
+    exit()
     # #################################################
 
     # solve static problem
@@ -190,9 +198,14 @@ if __name__ == "__main__":
     )
 
     sol_stat, _, _ = forward_statics(la_t_stat, verbose=True, solver="newton")
+
+    system_stat.set_new_initial_state(sol_stat.q[-1], sol_stat.u[-1])
+    riks = Riks(system_stat, la_arc0=0.1, compute_init_ds=False)
+
     rod_gravity_stat.force = lambda t, xi, f=rod_gravity_stat.force: f(
         sol_stat.t[-1], xi
     )
+
     # ---- trajectory generation ----
     # fmt: off
     r_OP_set_points = np.array([
@@ -244,7 +257,13 @@ if __name__ == "__main__":
         rtol=rtol,
         max_step=max_step,
     )
+
+    # from cProfile import Profile
+    # prof = Profile()
+    # prof.enable()
     sol = solver.solve()
+    # prof.disable()
+    # prof.dump_stats("run_control_tdcr_li2023.prof")
 
     # ---- visualization ----
     t, q, u = sol.t, sol.q, sol.u
