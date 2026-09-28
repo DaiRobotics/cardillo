@@ -24,6 +24,7 @@ class Force_line_distributed:
             self._h_weights = (
                 np.pad(rod.L_els, (1, 0)) + np.pad(rod.L_els, (0, 1))
             ) / 2
+            self._h_weights = np.repeat(self._h_weights, 3)
 
     def assembler_callback(self):
         if self._is_discrete_rod:
@@ -69,11 +70,9 @@ class Force_line_distributed:
     #####################
     def h(self, t, q, u):
         if self._is_discrete_rod:
-            return np.concatenate(
-                [
-                    self.force(t, xi) * weight
-                    for xi, weight in zip(self.rod.xi_node, self._h_weights)
-                ]
+            return (
+                np.concatenate([self.force(t, xi) for xi in self.rod.xi_node])
+                * self._h_weights
             )
         else:
             h = np.zeros(self.rod.nu, dtype=np.common_type(q, u))

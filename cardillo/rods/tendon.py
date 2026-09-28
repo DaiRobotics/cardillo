@@ -209,15 +209,22 @@ class RodTendonForce(RodTendonKinematics):
 
         self.nla_tau = 1
 
+        self._Wla_tau_q_coo = CooMatrix((self.n_vert * 12, self.n_vert * 14))
+        self._Wla_tau_q_coo.col = self._W_t_q_coo.col.copy()
+        self._Wla_tau_q_coo.row = self._W_t_q_coo.row.copy()
+
+        self._Wla_tau_q_jit = jit(self._Wla_tau_q_jax)
+
     def W_tau(self, t, q):
         return self.W_t(q)
 
+    def _Wla_tau_q_jax(self, q, la_tau):
+        return self._W_t_q_jax(q) * la_tau
+
     def Wla_tau_q(self, t, q, u):
-        W_t_q = self.W_t_q(q)
-        coo = CooMatrix(W_t_q.shape)
-        coo.col = W_t_q.col
-        coo.row = W_t_q.row
-        coo.data = W_t_q.data * self.la_tau(t, q, u)
+        la_tau = self.la_tau(t, q, u)
+        coo = self._Wla_tau_q_coo
+        coo.data = self._Wla_tau_q_jit(q, la_tau)
         return coo
 
     def Wla_tau_u(self, t, q, u):

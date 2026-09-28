@@ -36,7 +36,7 @@ class ControllerFeedbackLinearization:
         self.la_t_comp = np.zeros(self.nla_tau, dtype=np.float64)
 
     def W_tau(self, t, q):
-        W_tau = CooMatrix((self._nu, self._nq))
+        W_tau = CooMatrix((self._nu, self.nla_tau))
         for i, td, qDOF, uDOF in zip(
             range(self.nla_tau), self.tendons, self._td_qDOF, self._td_uDOF
         ):
@@ -134,7 +134,7 @@ class ControllerInverseStatics:
         return coo
 
     def W_tau(self, t, q):
-        W_tau = CooMatrix((self._nu, self._nq))
+        W_tau = CooMatrix((self._nu, self.nla_tau))
         for i, td, qDOF, uDOF in zip(
             range(self.nla_tau), self.tendons, self._td_qDOF, self._td_uDOF
         ):
