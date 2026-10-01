@@ -27,12 +27,14 @@ class ScipyDAE:
         method="Radau",
         rtol=1.0e-3,
         atol=1.0e-6,
+        verbose=True,
         **kwargs,
     ):
         self.system = system
         self.rtol = rtol
         self.atol = atol
         self.method = method
+        self.verbose = verbose
         self.kwargs = kwargs
 
         self.nq = system.nq
@@ -83,9 +85,10 @@ class ScipyDAE:
         self.dt = dt
         self.t_eval = np.arange(t0, self.t1 + self.dt, self.dt)
 
-        self.frac = (t1 - t0) / 100
-        self.pbar = tqdm(total=100, unit="pct")
-        self.pbar_i = 0
+        if verbose:
+            self.frac = (t1 - t0) / 100
+            self.pbar = tqdm(total=100, unit="pct")
+            self.pbar_i = 0
 
         # data allocation
         self.F = CooMatrix((1, self.ny), manual_sync=True)
@@ -137,10 +140,11 @@ class ScipyDAE:
     def fun(self, t, y, yp):
         t = float(t)
         # update progress bar
-        pbar_i = int(np.floor((t + self.frac / 2) / self.frac))
-        self.pbar.update(pbar_i - self.pbar_i)
-        self.pbar.set_description(f"{self.method}: t {t:0.2e}s < {self.t1:0.2e}s")
-        self.pbar_i = pbar_i
+        if self.verbose:
+            pbar_i = int(np.floor((t + self.frac / 2) / self.frac))
+            self.pbar.update(pbar_i - self.pbar_i)
+            self.pbar.set_description(f"{self.method}: t {t:0.2e}s < {self.t1:0.2e}s")
+            self.pbar_i = pbar_i
 
         # unpack vectors
         s1, s2, s3, s4, s5 = self.split
@@ -378,7 +382,8 @@ class ScipyDAE:
             jac=self.jac,
             **self.kwargs,
         )
-        self.pbar.close()
+        if self.verbose:
+            self.pbar.close()
         # solver_summary.print()
 
         # unpack solution
