@@ -1,0 +1,13 @@
+# simulation output next to the scripts
+*.png
+*.svg
+*.pdf
+*.gif
+*.mp4
+vtk/
+vtk_*/
+cache/
+qp_cache/
+thesis_data/
+# input data
+!data/**/*.csv
