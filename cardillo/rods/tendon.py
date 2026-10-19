@@ -11,7 +11,10 @@ from cardillo.visualization.vtk_render2 import RuntimeVisualBase
 
 
 class RodTendonExport(RuntimeVisualBase):
-    def __init__(self, n_vert, tube_radius=1e-3, color=(0, 200, 50), opacity=1):
+    def __init__(
+        self, n_vert, tube_radius=1e-3, name="tendon", color=(0, 200, 50), opacity=1
+    ):
+        self.name = name
         self._color = color
         self._opacity = opacity
         self._tube_radius = tube_radius
@@ -65,8 +68,17 @@ class RodTendonExport(RuntimeVisualBase):
 
 
 class RodTendonKinematics(RodTendonExport):
-    def __init__(self, rod: DiscreteRod, xis, B_r_CPs=None, **kwargs) -> None:
-        super().__init__(len(xis), **kwargs)
+    def __init__(
+        self,
+        rod: DiscreteRod,
+        xis,
+        B_r_CPs=None,
+        name="tendon",
+        color=(0, 200, 50),
+        **kwargs
+    ) -> None:
+        super().__init__(len(xis), name=name, color=color, **kwargs)
+        self._jaxed = True
         self.rod = rod
         self.xis = xis
         self.n_vert = len(xis)
@@ -194,27 +206,50 @@ class RodTendonForce(RodTendonKinematics):
     def __init__(
         self, rod: DiscreteRod, xis, B_r_CPs=None, name="tendon", color=(0, 200, 50)
     ) -> None:
-        self.name = name
-        super().__init__(rod, xis, B_r_CPs=B_r_CPs, color=color)
+        super().__init__(rod, xis, B_r_CPs=B_r_CPs, name=name, color=color)
 
         self.nla_tau = 1
 
+        self._Wla_tau_q_coo = CooMatrix((self.n_vert * 12, self.n_vert * 14))
+        self._Wla_tau_q_coo.col = self._W_t_q_coo.col.copy()
+        self._Wla_tau_q_coo.row = self._W_t_q_coo.row.copy()
+
+        self.__W_tau_jit = jit(self.W_tau_jax)
+        self.__Wla_tau_q_jit = jit(self.Wla_tau_q_jax)
+
+    def assembler_callback(self):
+        super().assembler_callback()
+
+        self.W_tau_jax_row = np.arange(len(self.uDOF), dtype=int)
+        self.W_tau_jax_col = np.zeros(len(self.uDOF), dtype=int)
+
+        self.Wla_tau_q_jax_row = self._Wla_tau_q_coo.row
+        self.Wla_tau_q_jax_col = self._Wla_tau_q_coo.col
+
+    def W_tau_jax(self, t, q):
+        return self._W_t_jit(q)
+
     def W_tau(self, t, q):
-        return self.W_t(q)
+        return self._W_t_jit(q)
+
+    def Wla_tau_q_jax(self, t, q, u):
+        la_tau = self.la_tau(t, q, u)
+        return self._W_t_q_jit(q) * la_tau
 
     def Wla_tau_q(self, t, q, u):
-        W_t_q = self.W_t_q(q)
-        coo = CooMatrix(W_t_q.shape)
-        coo.col = W_t_q.col
-        coo.row = W_t_q.row
-        coo.data = W_t_q.data * self.la_tau(t, q, u)
+        coo = self._Wla_tau_q_coo
+        coo.data = self.__Wla_tau_q_jit(t, q, u)
         return coo
 
-    def Wla_tau_u(self, t, q, u):
-        return None
+    def la_tau_jax(self, t, q, u):
+        return 0.0
 
     def la_tau(self, t, q, u):
         return 0.0
+
+    # @property
+    # def la_tau(self):
+    #     return JaxProxy(self._la_tau, self._la_tau_jax)
 
 
 class RodTendonForceIntegrator(RodTendonKinematics):
@@ -222,7 +257,7 @@ class RodTendonForceIntegrator(RodTendonKinematics):
         self, rod: DiscreteRod, xis, B_r_CPs=None, name="tendon", color=(0, 200, 50)
     ) -> None:
         raise NotImplementedError
-        super().__init__(rod, xis, B_r_CPs, name, color)
+        super().__init__(rod, xis, B_r_CPs=B_r_CPs, name=name, color=color)
         self.nla_tau = 1
         self.nq = 1
         self.q0 = np.zeros(1)

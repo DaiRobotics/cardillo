@@ -227,51 +227,9 @@ class PositionOrientationBase:
             _jaxed = self._jaxed = False
 
         if _jaxed:
-            g_jit = jit(self._g_jx)
+            self.__g_dot_q_jax = jacrev(self.g_dot_jax, argnums=1)
 
-            def g(t, q):
-                return g_jit(t, q)
-
-            g_q_jit = jit(self._g_q_jx)
-
-            def g_q(t, q):
-                return g_q_jit(t, q)
-
-            g_dot_jit = jit(self._g_dot_jx)
-
-            def g_dot(t, q, u):
-                return g_dot_jit(t, q, u)
-
-            g_dot_q_jit = jit(jacrev(self._g_dot_jx, argnums=1))
-
-            def g_dot_q(t, q, u):
-                return g_dot_q_jit(t, q, u)
-
-            W_g_jit = jit(self._W_g_jx)
-
-            def W_g(t, q):
-                return W_g_jit(t, q)
-
-            W_g_q_jx = jacrev(self._W_g_jx, argnums=1)
-            Wla_g_q_jit = jit(
-                lambda t, q, la_g: jnp.einsum("ijk,j->ik", W_g_q_jx(t, q), la_g)
-            )
-
-            def Wla_g_q(t, q, la_g):
-                return Wla_g_q_jit(t, q, la_g)
-
-            g_dot_u_jit = jit(lambda t, q: self._W_g_jx(t, q).T)
-
-            def g_dot_u(t, q):
-                return g_dot_u_jit(t, q)
-
-        self.g = g if _jaxed else self._g
-        self.g_q = g_q if _jaxed else self._g_q
-        self.g_dot = g_dot if _jaxed else self._g_dot
-        self.g_dot_q = g_dot_q if _jaxed else self._g_dot_q
-        self.W_g = W_g if _jaxed else self._W_g
-        self.Wla_g_q = Wla_g_q if _jaxed else self._Wla_g_q
-        self.g_dot_u = g_dot_u if _jaxed else self._g_dot_u
+            self.__W_g_q_jax = jacrev(self._W_g_jax, argnums=1)
 
     def assembler_callback(self):
         local_qDOF1, local_qDOF2 = concatenate_qDOF(self)
@@ -323,6 +281,22 @@ class PositionOrientationBase:
             assert self.nla_g_rot == 0  # Spherical case
 
         # auxiliary_functions(self, B1_r_P1J0, B2_r_P2J0, A_K1J0, A_K2J0)
+
+        if self._jaxed:
+            self.W_g_jax_row = np.repeat(np.arange(self._nu), self.nla_g)
+            self.W_g_jax_col = np.tile(np.arange(self.nla_g), self._nu)
+
+            self.g_q_jax_row = np.repeat(np.arange(self.nla_g), self._nq)
+            self.g_q_jax_col = np.tile(np.arange(self._nq), self.nla_g)
+
+            self.Wla_g_q_jax_row = np.repeat(np.arange(self._nu), self._nq)
+            self.Wla_g_q_jax_col = np.tile(np.arange(self._nq), self._nu)
+
+            self.g_dot_q_jax_row = np.repeat(np.arange(self.nla_g), self._nq)
+            self.g_dot_q_jax_col = np.tile(np.arange(self._nq), self.nla_g)
+
+            self.g_dot_u_jax_row = np.repeat(np.arange(self.nla_g), self._nu)
+            self.g_dot_u_jax_col = np.tile(np.arange(self._nu), self.nla_g)
 
     # auxiliary functions
     def r_OJ1(self, t, q):
@@ -536,19 +510,7 @@ class PositionOrientationBase:
             self.subsystem2.B_J_R_q(t, q[self._nq1 :], self.xi2).T @ self.A_IB2(t, q).T
         ).T
 
-    def _g(self, t, q):
-        g = np.zeros(self.nla_g, dtype=float)
-        g[:3] = self.r_OJ2(t, q) - self.r_OJ1(t, q)
-
-        if self.constrain_orientation:
-            A_IJ1 = self.A_IB1(t, q) @ self.A_K1J0
-            A_IJ2 = self.A_IB2(t, q) @ self.A_K2J0
-            for i, (a, b) in enumerate(self.projection_pairs):
-                g[3 + i] = A_IJ1[:, a] @ A_IJ2[:, b]
-
-        return g
-
-    def _g_jx(self, t, q):
+    def g_jax(self, t, q):
         g = self.r_OJ2(t, q) - self.r_OJ1(t, q)
 
         if self.constrain_orientation:
@@ -560,7 +522,40 @@ class PositionOrientationBase:
             g = jnp.concatenate((g, g2))
         return g
 
-    def _g_q(self, t, q):
+    def g(self, t, q):
+        g = np.zeros(self.nla_g, dtype=float)
+        g[:3] = self.r_OJ2(t, q) - self.r_OJ1(t, q)
+
+        if self.constrain_orientation:
+            A_IJ1 = self.A_IB1(t, q) @ self.A_K1J0
+            A_IJ2 = self.A_IB2(t, q) @ self.A_K2J0
+            for i, (a, b) in enumerate(self.projection_pairs):
+                g[3 + i] = A_IJ1[:, a] @ A_IJ2[:, b]
+
+        return g
+
+    def g_q_jax(self, t, q):
+        g_q = jnp.concatenate((-self.r_OJ1_q1(t, q), self.r_OJ2_q2(t, q)), axis=1)
+
+        if self.constrain_orientation:
+            A_IJ1 = self.A_IB1(t, q) @ self.A_K1J0
+            A_IJ2 = self.A_IB2(t, q) @ self.A_K2J0
+
+            A_IJ1_q1 = self.A_K1J0.T @ self.A_IB_q1(t, q)
+            A_IJ2_q2 = self.A_K2J0.T @ self.A_IB_q2(t, q)
+
+            g2_q = jnp.array(
+                [
+                    jnp.concatenate(
+                        (A_IJ2[:, b] @ A_IJ1_q1[:, a], A_IJ1[:, a] @ A_IJ2_q2[:, b])
+                    )
+                    for a, b in self.projection_pairs
+                ]
+            )
+            g_q = jnp.concatenate((g_q, g2_q))
+        return g_q.ravel()
+
+    def g_q(self, t, q):
         g_q = np.zeros((self.nla_g, self._nq), dtype=float)
         nq1 = self._nq1
 
@@ -580,43 +575,7 @@ class PositionOrientationBase:
 
         return g_q
 
-    def _g_q_jx(self, t, q):
-        g_q = jnp.concatenate((-self.r_OJ1_q1(t, q), self.r_OJ2_q2(t, q)), axis=1)
-
-        if self.constrain_orientation:
-            A_IJ1 = self.A_IB1(t, q) @ self.A_K1J0
-            A_IJ2 = self.A_IB2(t, q) @ self.A_K2J0
-
-            A_IJ1_q1 = self.A_K1J0.T @ self.A_IB_q1(t, q)
-            A_IJ2_q2 = self.A_K2J0.T @ self.A_IB_q2(t, q)
-
-            g2_q = jnp.array(
-                [
-                    jnp.concatenate(
-                        (A_IJ2[:, b] @ A_IJ1_q1[:, a], A_IJ1[:, a] @ A_IJ2_q2[:, b])
-                    )
-                    for a, b in self.projection_pairs
-                ]
-            )
-            g_q = jnp.concatenate((g_q, g2_q))
-        return g_q
-
-    def _g_dot(self, t, q, u):
-        g_dot = np.zeros(self.nla_g, dtype=float)
-        g_dot[:3] = self.v_J2(t, q, u) - self.v_J1(t, q, u)
-
-        if self.constrain_orientation:
-            A_IJ1 = self.A_IB1(t, q) @ self.A_K1J0
-            A_IJ2 = self.A_IB2(t, q) @ self.A_K2J0
-
-            Omega21 = self.Omega1(t, q, u) - self.Omega2(t, q, u)
-
-            for i, (a, b) in enumerate(self.projection_pairs):
-                n = cross3(A_IJ1[:, a], A_IJ2[:, b])
-                g_dot[3 + i] = n @ Omega21
-        return g_dot
-
-    def _g_dot_jx(self, t, q, u):
+    def g_dot_jax(self, t, q, u):
         g_dot = self.v_J2(t, q, u) - self.v_J1(t, q, u)
 
         if self.constrain_orientation:
@@ -632,7 +591,25 @@ class PositionOrientationBase:
             g_dot = jnp.concatenate((g_dot, g_dot2))
         return g_dot
 
-    def _g_dot_q(self, t, q, u):
+    def g_dot(self, t, q, u):
+        g_dot = np.zeros(self.nla_g, dtype=float)
+        g_dot[:3] = self.v_J2(t, q, u) - self.v_J1(t, q, u)
+
+        if self.constrain_orientation:
+            A_IJ1 = self.A_IB1(t, q) @ self.A_K1J0
+            A_IJ2 = self.A_IB2(t, q) @ self.A_K2J0
+
+            Omega21 = self.Omega1(t, q, u) - self.Omega2(t, q, u)
+
+            for i, (a, b) in enumerate(self.projection_pairs):
+                n = cross3(A_IJ1[:, a], A_IJ2[:, b])
+                g_dot[3 + i] = n @ Omega21
+        return g_dot
+
+    def g_dot_q_jax(self, t, q, u):
+        return self.__g_dot_q_jax(t, q, u).ravel()
+
+    def g_dot_q(self, t, q, u):
         g_dot_q = np.zeros((self.nla_g, self._nq), dtype=float)
         nq1 = self._nq1
         g_dot_q[:3, :nq1] = -self.v_J1_q1(t, q, u)
@@ -661,8 +638,11 @@ class PositionOrientationBase:
 
         return g_dot_q
 
-    def _g_dot_u(self, t, q):
-        return self._W_g(t, q).T
+    def g_dot_u_jax(self, t, q):
+        return self._W_g_jax(t, q).T.ravel()
+
+    def g_dot_u(self, t, q):
+        return self.W_g(t, q).T
 
     def g_ddot(self, t, q, u, u_dot):
         g_ddot = np.zeros(self.nla_g, dtype=np.float64)
@@ -686,7 +666,36 @@ class PositionOrientationBase:
 
         return g_ddot
 
-    def _W_g(self, t, q):
+    def _W_g_jax(self, t, q):
+        W_g = jnp.concatenate(
+            (
+                -self.subsystem1.J_P(t, q[: self._nq1], self.xi1, self.B1_r_P1J0).T,
+                self.subsystem2.J_P(t, q[self._nq1 :], self.xi2, self.B2_r_P2J0).T,
+            ),
+            axis=0,
+        )
+
+        if self.constrain_orientation:
+            A_IB1 = self.A_IB1(t, q)
+            A_IB2 = self.A_IB2(t, q)
+
+            A_IJ1 = A_IB1 @ self.A_K1J0
+            A_IJ2 = A_IB2 @ self.A_K2J0
+
+            J_R1 = A_IB1 @ self.subsystem1.B_J_R(t, q[: self._nq1], self.xi1)
+            J_R2 = A_IB2 @ self.subsystem2.B_J_R(t, q[self._nq1 :], self.xi2)
+
+            n = jnp.array(
+                [mj.cross3(A_IJ1[:, a], A_IJ2[:, b]) for a, b in self.projection_pairs]
+            )
+            W_g2 = jnp.concatenate(((n @ J_R1).T, (-n @ J_R2).T), axis=0)
+            W_g = jnp.concatenate((W_g, W_g2), axis=1)
+        return W_g
+
+    def W_g_jax(self, t, q):
+        return self._W_g_jax(t, q).ravel()
+
+    def W_g(self, t, q):
         W_g = np.zeros((self._nu, self.nla_g), dtype=float)
         nu1 = self._nu1
         W_g[:nu1, :3] = -self.subsystem1.J_P(
@@ -717,33 +726,10 @@ class PositionOrientationBase:
             #     W_g[nu1:, 3 + i] = -n @ J_R2
         return W_g
 
-    def _W_g_jx(self, t, q):
-        W_g = jnp.concatenate(
-            (
-                -self.subsystem1.J_P(t, q[: self._nq1], self.xi1, self.B1_r_P1J0).T,
-                self.subsystem2.J_P(t, q[self._nq1 :], self.xi2, self.B2_r_P2J0).T,
-            ),
-            axis=0,
-        )
+    def Wla_g_q_jax(self, t, q, la_g):
+        return jnp.einsum("ijk,j->ik", self.__W_g_q_jax(t, q), la_g).ravel()
 
-        if self.constrain_orientation:
-            A_IB1 = self.A_IB1(t, q)
-            A_IB2 = self.A_IB2(t, q)
-
-            A_IJ1 = A_IB1 @ self.A_K1J0
-            A_IJ2 = A_IB2 @ self.A_K2J0
-
-            J_R1 = A_IB1 @ self.subsystem1.B_J_R(t, q[: self._nq1], self.xi1)
-            J_R2 = A_IB2 @ self.subsystem2.B_J_R(t, q[self._nq1 :], self.xi2)
-
-            n = jnp.array(
-                [mj.cross3(A_IJ1[:, a], A_IJ2[:, b]) for a, b in self.projection_pairs]
-            )
-            W_g2 = jnp.concatenate(((n @ J_R1).T, (-n @ J_R2).T), axis=0)
-            W_g = jnp.concatenate((W_g, W_g2), axis=1)
-        return W_g
-
-    def _Wla_g_q(self, t, q, la_g):
+    def Wla_g_q(self, t, q, la_g):
         Wla_g_q = np.zeros((self._nu, self._nq), dtype=float)
         nq1 = self._nq1
         nu1 = self._nu1

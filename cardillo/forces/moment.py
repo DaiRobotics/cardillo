@@ -1,3 +1,4 @@
+import numpy as np
 from numpy import einsum, zeros
 from vtk import VTK_VERTEX
 from jax import jit, numpy as jnp
@@ -17,7 +18,7 @@ class B_Moment:
         Name of contribution.
     """
 
-    def __init__(self, moment, subsystem, xi=zeros(3), name="moment"):
+    def __init__(self, moment, subsystem, xi=zeros(3), name="B_moment"):
         if not callable(moment):
             self.moment = lambda t: moment
         else:
@@ -29,36 +30,26 @@ class B_Moment:
         self.B_J_R = lambda t, q: subsystem.B_J_R(t, q, xi=xi)
         self.B_J_R_q = lambda t, q: subsystem.B_J_R_q(t, q, xi=xi)
 
-        _jaxed = self._jaxed = (
-            subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
-        )
-
-        if _jaxed:
-            h_jit = jit(self._h)
-
-            def h(t, q, u):
-                return h_jit(t, q, u)
-
-            h_q_jit = jit(self._h_q_jx)
-
-            def h_q(t, q, u):
-                return h_q_jit(t, q, u)
-
-        self.h = h if _jaxed else self._h
-        self.h_q = h_q if _jaxed else self._h_q
+        self._jaxed = subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
 
     def assembler_callback(self):
         self.qDOF = self.subsystem.qDOF[self.subsystem.local_qDOF_P(self.xi)]
         self.uDOF = self.subsystem.uDOF[self.subsystem.local_uDOF_P(self.xi)]
 
-    def _h(self, t, q, u):
+        self.h_q_jax_row = np.repeat(np.arange(len(self.uDOF)), len(self.qDOF))
+        self.h_q_jax_col = np.tile(np.arange(len(self.qDOF)), len(self.uDOF))
+
+    def h_jax(self, t, q, u):
         return self.moment(t) @ self.B_J_R(t, q)
 
-    def _h_q(self, t, q, u):
-        return einsum("i,ijk->jk", self.moment(t), self.B_J_R_q(t, q))
+    def h(self, t, q, u):
+        return self.moment(t) @ self.B_J_R(t, q)
 
-    def _h_q_jx(self, t, q, u):
-        return jnp.einsum("i,ijk->jk", self.moment(t), self.B_J_R_q(t, q))
+    def h_q_jax(self, t, q, u):
+        return jnp.einsum("i,ijk->jk", self.moment(t), self.B_J_R_q(t, q)).ravel()
+
+    def h_q(self, t, q, u):
+        return einsum("i,ijk->jk", self.moment(t), self.B_J_R_q(t, q))
 
     def export(self, sol_i, **kwargs):
         r_OP = self.subsystem.r_OP(sol_i.t, sol_i.q[self.qDOF], xi=self.xi)
@@ -99,42 +90,33 @@ class Moment:
         self.B_J_R = lambda t, q: subsystem.B_J_R(t, q, xi=xi)
         self.B_J_R_q = lambda t, q: subsystem.B_J_R_q(t, q, xi=xi)
 
-        _jaxed = self._jaxed = (
-            subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
-        )
-
-        if _jaxed:
-            h_jit = jit(self._h)
-
-            def h(t, q, u):
-                return h_jit(t, q, u)
-
-            h_q_jit = jit(self._h_q_jx)
-
-            def h_q(t, q, u):
-                return h_q_jit(t, q, u)
-
-        self.h = h if _jaxed else self._h
-        self.h_q = h_q if _jaxed else self._h_q
+        self._jaxed = subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
 
     def assembler_callback(self):
         self.qDOF = self.subsystem.qDOF[self.subsystem.local_qDOF_P(self.xi)]
         self.uDOF = self.subsystem.uDOF[self.subsystem.local_uDOF_P(self.xi)]
 
-    def _h(self, t, q, u):
+        self.h_q_jax_row = np.repeat(np.arange(len(self.uDOF)), len(self.qDOF))
+        self.h_q_jax_col = np.tile(np.arange(len(self.qDOF)), len(self.uDOF))
+
+    def h_jax(self, t, q, u):
         return (self.moment(t) @ self.A_IB(t, q)) @ self.B_J_R(t, q)
 
-    def _h_q(self, t, q, u):
+    def h(self, t, q, u):
+        return (self.moment(t) @ self.A_IB(t, q)) @ self.B_J_R(t, q)
+
+    def h_q_jax(self, t, q, u):
+        I_M = self.moment(t)
+        return (
+            jnp.einsum("i,ijl,jk->kl", I_M, self.A_IB_q(t, q), self.B_J_R(t, q)).ravel()
+            + jnp.einsum("i,ijk->jk", I_M @ self.A_IB(t, q), self.B_J_R_q(t, q)).ravel()
+        )
+
+    def h_q(self, t, q, u):
         I_M = self.moment(t)
         return einsum(
             "i,ijl,jk->kl", I_M, self.A_IB_q(t, q), self.B_J_R(t, q)
         ) + einsum("i,ijk->jk", I_M @ self.A_IB(t, q), self.B_J_R_q(t, q))
-
-    def _h_q_jx(self, t, q, u):
-        I_M = self.moment(t)
-        return jnp.einsum(
-            "i,ijl,jk->kl", I_M, self.A_IB_q(t, q), self.B_J_R(t, q)
-        ) + jnp.einsum("i,ijk->jk", I_M @ self.A_IB(t, q), self.B_J_R_q(t, q))
 
     def export(self, sol_i, **kwargs):
         r_OP = self.subsystem.r_OP(sol_i.t, sol_i.q[self.qDOF], xi=self.xi)

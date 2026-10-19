@@ -470,19 +470,19 @@ class DiscreteRod(DiscreteRodExport):
             lambda q: DiscreteRod._eval_els(DiscreteRod._gen_element_q(q), self.L_els)
         )
 
-        self._q_dot_jit = jit(self._q_dot_jax)
+        self.__q_dot_jit = jit(self.q_dot_jax)
 
-        self._q_dot_q_jit = jit(self._q_dot_q)
+        self.__q_dot_q_jit = jit(self.q_dot_q_jax)
 
-        self._h_jit = jit(self._h_jax)
+        self.__h_jit = jit(self.h_jax)
 
-        self._h_u_jit = jit(self._h_u_jax)
+        self.__h_u_jit = jit(self.h_u_jax)
 
-        self._la_c_jit = jit(self._la_c_jax)
+        self.__la_c_jit = jit(self.la_c_jax)
 
-        self._c_jit = jit(self._c_jax)
+        self.__c_jit = jit(self.c_jax)
 
-        self._c_q_jit = jit(self._c_q_jax)
+        self.__c_q_jit = jit(self.c_q_jax)
 
         if self._damping:
             c_u_jit = jit(
@@ -499,9 +499,11 @@ class DiscreteRod(DiscreteRodExport):
 
             self.c_u = c_u
 
-        self._W_c_jit = jit(self._W_c_jax)
+        self.__W_c_jit = jit(self.W_c_jax)
 
-        self._Wla_c_q_jit = jit(self._Wla_c_q_jax)
+        self.__Wla_c_q_jit = jit(self.Wla_c_q_jax)
+
+        self._alpha = jit(self._alpha_jax)
 
     def __init_coo__(self, cross_section_inertias):
         # M
@@ -603,6 +605,30 @@ class DiscreteRod(DiscreteRodExport):
             np.arange(self.nnode)[:, None],
             self.nodalDOF_p,
         )
+
+        self.q_dot_q_jax_row = self._q_dot_q_coo.row
+        self.q_dot_q_jax_col = self._q_dot_q_coo.col
+
+        self.h_u_jax_row = self._h_u_coo.row
+        self.h_u_jax_col = self._h_u_coo.col
+
+        self.q_dot_u_jax_row = self._q_dot_u_coo.row
+        self.q_dot_u_jax_col = self._q_dot_u_coo.col
+
+        self.M_jax_row = self._M_coo.row
+        self.M_jax_col = self._M_coo.col
+
+        self.g_S_q_jax_row = self._g_S_q_coo.row
+        self.g_S_q_jax_col = self._g_S_q_coo.col
+
+        self.c_q_jax_row = self._c_q_coo.row
+        self.c_q_jax_col = self._c_q_coo.col
+
+        self.W_c_jax_row = self._W_c_coo.row
+        self.W_c_jax_col = self._W_c_coo.col
+
+        self.Wla_c_q_jax_row = self._Wla_c_q_coo.row
+        self.Wla_c_q_jax_col = self._Wla_c_q_coo.col
 
     @staticmethod
     @jit
@@ -865,11 +891,11 @@ class DiscreteRod(DiscreteRodExport):
 
     _q_dot_nodes = jit(vmap(_q_dot_node.__func__))
 
-    def _q_dot_jax(self, t, q, u):
+    def q_dot_jax(self, t, q, u):
         return DiscreteRod._q_dot_nodes(q.reshape((-1, 7)), u.reshape((-1, 6))).ravel()
 
     def q_dot(self, t, q, u):
-        return self._q_dot_jit(t, q, u)
+        return self.__q_dot_jit(t, q, u)
 
     @staticmethod
     @jit
@@ -878,14 +904,22 @@ class DiscreteRod(DiscreteRodExport):
 
     _p_dot_p_nodes = jit(vmap(_p_dot_p_node.__func__))
 
-    def _q_dot_q(self, t, q, u):
+    def q_dot_q_jax(self, t, q, u):
         return DiscreteRod._p_dot_p_nodes(
             q.reshape((-1, 7)), u.reshape((-1, 6))
         ).ravel()
 
     def q_dot_q(self, t, q, u):
-        self._q_dot_q_coo.data = self._q_dot_q_jit(t, q, u)
+        self._q_dot_q_coo.data = self.__q_dot_q_jit(t, q, u)
         return self._q_dot_q_coo
+
+    def q_dot_u_jax(self, t, q, u):
+        T_SO3_inv_quat_nodes = mj.T_SO3_inv_quat_batch(
+            self._view_nodal_q(q)[:, 3:], normalize=False
+        ).ravel()
+        return jnp.concatenate(
+            [self._q_dot_u_coo.data[: -len(T_SO3_inv_quat_nodes)], T_SO3_inv_quat_nodes]
+        )
 
     def q_dot_u(self, t, q):
         T_SO3_inv_quat_nodes = (
@@ -905,6 +939,9 @@ class DiscreteRod(DiscreteRodExport):
     #####################
     # equations of motion
     #####################
+    def M_jax(self, t, q):
+        return self._M_coo.data
+
     def M(self, t, q):
         return self._M_coo
 
@@ -918,11 +955,11 @@ class DiscreteRod(DiscreteRodExport):
 
     _h_nodes = jit(vmap(_h_node.__func__))
 
-    def _h_jax(self, t, q, u):
+    def h_jax(self, t, q, u):
         return DiscreteRod._h_nodes(u.reshape((-1, 6)), self._B_Theta_C).ravel()
 
     def h(self, t, q, u):
-        return self._h_jit(t, q, u)
+        return self.__h_jit(t, q, u)
 
     @staticmethod
     @jit
@@ -931,21 +968,29 @@ class DiscreteRod(DiscreteRodExport):
 
     _h_u_nodes = jit(vmap(_h_u_node.__func__))
 
-    def _h_u_jax(self, t, q, u):
+    def h_u_jax(self, t, q, u):
         return DiscreteRod._h_u_nodes(
             u.reshape((-1, 6))[:, 3:], self._B_Theta_C
         ).ravel()
 
     def h_u(self, t, q, u):
-        self._h_u_coo.data = self._h_u_jit(t, q, u)
+        self._h_u_coo.data = self.__h_u_jit(t, q, u)
         return self._h_u_coo
 
     #####################################################
     # stabilization conditions for the kinematic equation
     #####################################################
+    def g_S_jax(self, t, q):
+        p = self._view_nodal_q(q)[:, 3:]
+        return jnp.einsum("ij,ij->i", p, p) - 1
+
     def g_S(self, t, q):
         p = self._view_nodal_q(q)[:, 3:]
         return np.einsum("ij,ij->i", p, p) - 1
+
+    def g_S_q_jax(self, t, q):
+        p = self._view_nodal_q(q)[:, 3:]
+        return (2 * p).ravel()
 
     def g_S_q(self, t, q):
         p = self._view_nodal_q(q)[:, 3:]
@@ -976,7 +1021,7 @@ class DiscreteRod(DiscreteRodExport):
 
     _la_c_damp_els = jit(vmap(_la_c_damp_el.__func__))
 
-    def _la_c_jax(self, t, q, u):
+    def la_c_jax(self, t, q, u):
         if not self._damping:
             return DiscreteRod._la_c_els(
                 DiscreteRod._gen_element_q(q),
@@ -1000,7 +1045,7 @@ class DiscreteRod(DiscreteRodExport):
             ).ravel()
 
     def la_c(self, t, q, u):
-        return self._la_c_jit(t, q, u)
+        return self.__la_c_jit(t, q, u)
 
     @staticmethod
     @jit
@@ -1029,7 +1074,7 @@ class DiscreteRod(DiscreteRodExport):
 
     _c_damp_els = jit(vmap(_c_damp_el.__func__))
 
-    def _c_jax(self, t, q, u, la_c):
+    def c_jax(self, t, q, u, la_c):
         if not self._damping:
             return DiscreteRod._c_els(
                 DiscreteRod._gen_element_q(q),
@@ -1055,7 +1100,7 @@ class DiscreteRod(DiscreteRodExport):
             ).ravel()
 
     def c(self, t, q, u, la_c):
-        return self._c_jit(t, q, u, la_c)
+        return self.__c_jit(t, q, u, la_c)
 
     def c_la_c(self):
         return self._c_la_c_coo
@@ -1079,7 +1124,7 @@ class DiscreteRod(DiscreteRodExport):
 
     _c_damp_q_els = jit(vmap(_c_damp_q_el.__func__))
 
-    def _c_q_jax(self, t, q, u, la_c):
+    def c_q_jax(self, t, q, u, la_c):
         if not self._damping:
             return DiscreteRod._c_q_els(
                 DiscreteRod._gen_element_q(q), self.L_els
@@ -1092,7 +1137,7 @@ class DiscreteRod(DiscreteRodExport):
             ).ravel()
 
     def c_q(self, t, q, u, la_c):
-        self._c_q_coo.data = self._c_q_jit(t, q, u, la_c)
+        self._c_q_coo.data = self.__c_q_jit(t, q, u, la_c)
         return self._c_q_coo
 
     @staticmethod
@@ -1119,7 +1164,7 @@ class DiscreteRod(DiscreteRodExport):
 
     _W_c_damp_els = jit(vmap(_W_c_damp_el.__func__))
 
-    def _W_c_jax(self, t, q):
+    def W_c_jax(self, t, q):
         if not self._damping:
             return DiscreteRod._W_c_els(
                 DiscreteRod._gen_element_q(q), self.L_els
@@ -1130,7 +1175,7 @@ class DiscreteRod(DiscreteRodExport):
             ).ravel()
 
     def W_c(self, t, q):
-        self._W_c_coo.data = self._W_c_jit(t, q)
+        self._W_c_coo.data = self.__W_c_jit(t, q)
         return self._W_c_coo
 
     @staticmethod
@@ -1163,7 +1208,7 @@ class DiscreteRod(DiscreteRodExport):
 
     _Wla_c_q_damp_els = jit(vmap(_Wla_c_q_damp_el.__func__))
 
-    def _Wla_c_q_jax(self, t, q, la_c):
+    def Wla_c_q_jax(self, t, q, la_c):
         if not self._damping:
             return DiscreteRod._Wla_c_q_els(
                 DiscreteRod._gen_element_q(q),
@@ -1178,10 +1223,10 @@ class DiscreteRod(DiscreteRodExport):
             ).ravel()
 
     def Wla_c_q(self, t, q, la_c):
-        self._Wla_c_q_coo.data = self._Wla_c_q_jit(t, q, la_c)
+        self._Wla_c_q_coo.data = self.__Wla_c_q_jit(t, q, la_c)
         return self._Wla_c_q_coo
 
-    def _alpha(self, xi):
+    def _alpha_jax(self, xi):
         num = self._element_number(xi)
         xi_node = jnp.array(self.xi_node)
         return (xi - xi_node[num]) / (xi_node[num + 1] - xi_node[num])

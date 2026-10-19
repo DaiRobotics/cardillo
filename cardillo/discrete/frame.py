@@ -54,6 +54,9 @@ class Frame:
     #####################
     # kinematic equations
     #####################
+    def q_dot_jax(self, t, q, u):
+        return jnp.array([])
+
     def q_dot(self, t, q, u):
         return np.array([])
 

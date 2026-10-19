@@ -1,3 +1,4 @@
+import numpy as np
 from numpy import einsum, zeros
 from vtk import VTK_VERTEX
 from jax import jit, numpy as jnp
@@ -32,39 +33,29 @@ class Force:
         self.J_P = lambda t, q: subsystem.J_P(t, q, xi, B_r_CP)
         self.J_P_q = lambda t, q: subsystem.J_P_q(t, q, xi, B_r_CP)
 
-        _jaxed = self._jaxed = (
-            subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
-        )
-
-        if _jaxed:
-            h_jit = jit(self._h)
-
-            def h(t, q, u):
-                return h_jit(t, q, u)
-
-            h_q_jit = jit(self._h_q_jx)
-
-            def h_q(t, q, u):
-                return h_q_jit(t, q, u)
-
-        self.h = h if _jaxed else self._h
-        self.h_q = h_q if _jaxed else self._h_q
+        self._jaxed = subsystem._jaxed if hasattr(subsystem, "_jaxed") else False
 
     def assembler_callback(self):
         self.qDOF = self.subsystem.qDOF[self.subsystem.local_qDOF_P(self.xi)]
         self.uDOF = self.subsystem.uDOF[self.subsystem.local_uDOF_P(self.xi)]
 
+        self.h_q_jax_row = np.repeat(np.arange(len(self.uDOF)), len(self.qDOF))
+        self.h_q_jax_col = np.tile(np.arange(len(self.qDOF)), len(self.uDOF))
+
     def E_pot(self, t, q):
         return -(self.force(t) @ self.r_OP(t, q))
 
-    def _h(self, t, q, u):
+    def h_jax(self, t, q, u):
         return self.force(t) @ self.J_P(t, q)
 
-    def _h_q(self, t, q, u):
-        return einsum("i,ijk->jk", self.force(t), self.J_P_q(t, q))
+    def h(self, t, q, u):
+        return self.force(t) @ self.J_P(t, q)
 
-    def _h_q_jx(self, t, q, u):
-        return jnp.einsum("i,ijk->jk", self.force(t), self.J_P_q(t, q))
+    def h_q_jax(self, t, q, u):
+        return jnp.einsum("i,ijk->jk", self.force(t), self.J_P_q(t, q)).ravel()
+
+    def h_q(self, t, q, u):
+        return einsum("i,ijk->jk", self.force(t), self.J_P_q(t, q))
 
     def export(self, sol_i, **kwargs):
         points = [self.r_OP(sol_i.t, sol_i.q[self.qDOF])]

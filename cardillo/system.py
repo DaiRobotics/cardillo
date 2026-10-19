@@ -1,7 +1,7 @@
 import numpy as np
 import warnings
 from copy import deepcopy
-from scipy.sparse import diags
+from jax import jit, numpy as jnp
 
 from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.discrete.frame import Frame
@@ -25,7 +25,7 @@ properties.extend(["gamma"])
 properties.extend(["c", "c_q", "c_u"])
 properties.extend(["g_S"])
 
-properties.extend(["la_tau"])
+properties.extend(["la_tau", "Wla_tau_q", "Wla_tau_u"])
 properties.extend(["tau"])
 
 properties.extend(["g_N"])
@@ -321,6 +321,18 @@ class System:
             coo[contr.la_cDOF, contr.la_cDOF] = contr.c_la_c()
         self._c_la_c0 = coo
 
+        _jaxed = True
+        for contr in self.contributions:
+            try:
+                if not contr._jaxed:
+                    _jaxed = False
+                    break
+            except AttributeError:
+                _jaxed = False
+        self._jaxed = _jaxed
+        if _jaxed:
+            self.__jit_func__()
+
         # compute consistent initial conditions
         (
             self.t0,
@@ -335,6 +347,56 @@ class System:
             self.la_F0,
         ) = consistent_initial_conditions(self, *args, **kwargs)
 
+    def __assemble_jax__(self, name, rowDOF, colDOF, contrs):
+        if len(contrs) > 0:
+            row = np.concatenate(
+                [
+                    getattr(contr, rowDOF)[getattr(contr, f"{name}_jax_row")]
+                    for contr in contrs
+                ]
+            )
+            col = np.concatenate(
+                [
+                    getattr(contr, colDOF)[getattr(contr, f"{name}_jax_col")]
+                    for contr in contrs
+                ]
+            )
+        else:
+            row = np.array([], dtype=int)
+            col = np.array([], dtype=int)
+        setattr(self, f"{name}_jax_row", row)
+        setattr(self, f"{name}_jax_col", col)
+
+    def __jit_func__(self):
+        self.M_jax_row = self._M0.row
+        self.M_jax_col = self._M0.col
+
+        self.c_la_c_jax_row = self._c_la_c0.row
+        self.c_la_c_jax_col = self._c_la_c0.col
+
+        self.__assemble_jax__("q_dot_q", "qDOF", "qDOF", self.__q_dot_q_contr)
+        self.__assemble_jax__("q_dot_u", "qDOF", "uDOF", self.__q_dot_u_contr)
+
+        self.__assemble_jax__("h_q", "uDOF", "qDOF", self.__h_q_contr)
+        self.__assemble_jax__("h_u", "uDOF", "uDOF", self.__h_u_contr)
+
+        self.__assemble_jax__("c_q", "la_cDOF", "qDOF", self.__c_q_contr)
+        self.__assemble_jax__("c_u", "la_cDOF", "uDOF", self.__c_u_contr)
+        self.__assemble_jax__("W_c", "uDOF", "la_cDOF", self.__c_contr)
+        self.__assemble_jax__("Wla_c_q", "uDOF", "qDOF", self.__c_q_contr)
+
+        self.__assemble_jax__("W_tau", "uDOF", "la_tauDOF", self.__la_tau_contr)
+        self.__assemble_jax__("Wla_tau_q", "uDOF", "qDOF", self.__Wla_tau_q_contr)
+        self.__assemble_jax__("Wla_tau_u", "uDOF", "uDOF", self.__Wla_tau_u_contr)
+
+        self.__assemble_jax__("g_q", "la_gDOF", "qDOF", self.__g_contr)
+        self.__assemble_jax__("g_dot_q", "la_gDOF", "qDOF", self.__g_contr)
+        self.__assemble_jax__("g_dot_u", "la_gDOF", "uDOF", self.__g_contr)
+        self.__assemble_jax__("W_g", "uDOF", "la_gDOF", self.__g_contr)
+        self.__assemble_jax__("Wla_g_q", "uDOF", "qDOF", self.__g_contr)
+
+        self.__assemble_jax__("g_S_q", "la_SDOF", "qDOF", self.__g_S_contr)
+
     def assembler_callback(self):
         for contr in self.__assembler_callback_contr:
             contr.assembler_callback()
@@ -342,6 +404,14 @@ class System:
     #####################
     # kinematic equations
     #####################
+    def q_dot_jax(self, t, q, u):
+        q_dot = jnp.zeros(self.nq, dtype=float)
+        for contr in self.__q_dot_contr:
+            q_dot = q_dot.at[contr.my_qDOF].set(
+                contr.q_dot_jax(t, q[contr.qDOF], u[contr.uDOF])
+            )
+        return q_dot
+
     def q_dot(self, t, q, u, format="dense", coo=None):
         if format == "dense" and coo is None:
             q_dot = np.zeros(self.nq, dtype=float)
@@ -355,6 +425,13 @@ class System:
                 coo[i, 0, contr.my_qDOF] = contr.q_dot(t, q[contr.qDOF], u[contr.uDOF])
             return coo
 
+    def q_dot_q_jax(self, t, q, u):
+        vals = [
+            contr.q_dot_q_jax(t, q[contr.qDOF], u[contr.uDOF])
+            for contr in self.__q_dot_q_contr
+        ]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
+
     def q_dot_q(self, t, q, u, format="coo", coo=None):
         if coo is None:
             coo = CooMatrix((self.nq, self.nq))
@@ -363,6 +440,13 @@ class System:
                 t, q[contr.qDOF], u[contr.uDOF]
             )
         return coo.asformat(format, fix_size=True)
+
+    def q_dot_u_jax(self, t, q, u):
+        vals = [
+            contr.q_dot_u_jax(t, q[contr.qDOF], u[contr.uDOF])
+            for contr in self.__q_dot_u_contr
+        ]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
 
     def q_dot_u(self, t, q, format="coo", coo=None):
         if coo is None:
@@ -396,6 +480,12 @@ class System:
     #####################
     # equations of motion
     #####################
+    def M_jax(self, t, q):
+        if self.constant_mass_matrix:
+            return self._M0.data
+        else:
+            raise NotImplementedError
+
     def M(self, t, q, format="coo", coo=None):
         if self.constant_mass_matrix:
             return self._M0.asformat(format, fix_size=True)
@@ -416,6 +506,12 @@ class System:
             coo[i, contr.uDOF, contr.qDOF] = contr.Mu_q(t, q[contr.qDOF], u[contr.uDOF])
         return coo.asformat(format, fix_size=True)
 
+    def h_jax(self, t, q, u):
+        h = jnp.zeros(self.nu, dtype=float)
+        for contr in self.__h_contr:
+            h = h.at[contr.uDOF].add(contr.h_jax(t, q[contr.qDOF], u[contr.uDOF]))
+        return h
+
     def h(self, t, q, u, format="dense", coo=None):
         if format == "dense" and coo is None:
             h = np.zeros(self.nu, dtype=float)
@@ -434,12 +530,24 @@ class System:
                 coo[i, 0, contr.uDOF] = contr.h(t, q[contr.qDOF], u[contr.uDOF])
             return coo
 
+    def h_q_jax(self, t, q, u):
+        vals = [
+            contr.h_q_jax(t, q[contr.qDOF], u[contr.uDOF]) for contr in self.__h_q_contr
+        ]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
+
     def h_q(self, t, q, u, format="coo", coo=None):
         if coo is None:
             coo = CooMatrix((self.nu, self.nq))
         for i, contr in enumerate(self.__h_q_contr):
             coo[i, contr.uDOF, contr.qDOF] = contr.h_q(t, q[contr.qDOF], u[contr.uDOF])
         return coo.asformat(format, fix_size=True)
+
+    def h_u_jax(self, t, q, u):
+        vals = [
+            contr.h_u_jax(t, q[contr.qDOF], u[contr.uDOF]) for contr in self.__h_u_contr
+        ]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
 
     def h_u(self, t, q, u, format="coo", coo=None):
         if coo is None:
@@ -456,6 +564,14 @@ class System:
         for contr in self.__c_contr:
             la_c[contr.la_cDOF] = contr.la_c(t, q[contr.qDOF], u[contr.uDOF])
         return la_c
+
+    def c_jax(self, t, q, u, la_c):
+        c = jnp.zeros(self.nla_c, dtype=float)
+        for contr in self.__c_contr:
+            c = c.at[contr.la_cDOF].set(
+                contr.c_jax(t, q[contr.qDOF], u[contr.uDOF], la_c[contr.la_cDOF])
+            )
+        return c
 
     def c(self, t, q, u, la_c, format="dense", coo=None):
         if format == "dense" and coo is None:
@@ -474,6 +590,13 @@ class System:
                 )
             return coo
 
+    def c_q_jax(self, t, q, u, la_c):
+        vals = [
+            contr.c_q_jax(t, q[contr.qDOF], u[contr.uDOF], la_c[contr.la_cDOF])
+            for contr in self.__c_q_contr
+        ]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
+
     def c_q(self, t, q, u, la_c, format="coo", coo=None):
         if coo is None:
             coo = CooMatrix((self.nla_c, self.nq))
@@ -482,6 +605,13 @@ class System:
                 t, q[contr.qDOF], u[contr.uDOF], la_c[contr.la_cDOF]
             )
         return coo.asformat(format, fix_size=True)
+
+    def c_u_jax(self, t, q, u, la_c):
+        vals = [
+            contr.c_u_jax(t, q[contr.qDOF], u[contr.uDOF], la_c[contr.la_cDOF])
+            for contr in self.__c_u_contr
+        ]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
 
     def c_u(self, t, q, u, la_c, format="coo", coo=None):
         if coo is None:
@@ -492,8 +622,15 @@ class System:
             )
         return coo.asformat(format, fix_size=True)
 
+    def c_la_c_jax(self):
+        return self._c_la_c0.data
+
     def c_la_c(self, format="coo"):
         return self._c_la_c0.asformat(format, fix_size=True)
+
+    def W_c_jax(self, t, q):
+        vals = [contr.W_c_jax(t, q[contr.qDOF]) for contr in self.__c_contr]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
 
     def W_c(self, t, q, format="coo", coo=None):
         if coo is None:
@@ -502,13 +639,12 @@ class System:
             coo[i, contr.uDOF, contr.la_cDOF] = contr.W_c(t, q[contr.qDOF])
         return coo.asformat(format, fix_size=True)
 
-    def Wla_c(self, t, q, u, la_c):
-        raise NotImplementedError
-        Wla_c = np.zeros(self.nu, dtype=float)
-        for i, contr in enumerate(self.__c_contr):
-            W_c = contr.W_c(t, q[contr.qDOF])
-            Wla_c[contr.uDOF] += W_c.tocsr(fix_size=True) @ la_c[contr.la_cDOF]
-        return Wla_c
+    def Wla_c_q_jax(self, t, q, la_c):
+        vals = [
+            contr.Wla_c_q_jax(t, q[contr.qDOF], la_c[contr.la_cDOF])
+            for contr in self.__c_q_contr
+        ]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
 
     def Wla_c_q(self, t, q, la_c, format="coo", coo=None):
         if coo is None:
@@ -522,6 +658,10 @@ class System:
     ###########
     # actuators
     ###########
+    def W_tau_jax(self, t, q):
+        vals = [contr.W_tau_jax(t, q[contr.qDOF]) for contr in self.__la_tau_contr]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
+
     def W_tau(self, t, q, format="coo", coo=None):
         if coo is None:
             coo = CooMatrix((self.nu, self.nla_tau))
@@ -529,25 +669,48 @@ class System:
             coo[i, contr.uDOF, contr.la_tauDOF] = contr.W_tau(t, q[contr.qDOF])
         return coo.asformat(format, fix_size=True)
 
+    def la_tau_jax(self, t, q, u):
+        la_tau = jnp.zeros(self.nla_tau, dtype=float)
+        for contr in self.__la_tau_contr:
+            la_tau = la_tau.at[contr.la_tauDOF].set(
+                # TODO use la_tau._jax
+                contr.la_tau(t, q[contr.qDOF], u[contr.uDOF])
+            )
+        return la_tau
+
     def la_tau(self, t, q, u):
         la_tau = np.zeros(self.nla_tau, dtype=float)
         for contr in self.__la_tau_contr:
             la_tau[contr.la_tauDOF] = contr.la_tau(t, q[contr.qDOF], u[contr.uDOF])
         return la_tau
 
+    def Wla_tau_q_jax(self, t, q, u):
+        vals = [
+            contr.Wla_tau_q_jax(t, q[contr.qDOF], u[contr.uDOF])
+            for contr in self.__Wla_tau_q_contr
+        ]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
+
     def Wla_tau_q(self, t, q, u, format="coo", coo=None):
         if coo is None:
             coo = CooMatrix((self.nu, self.nq))
-        for i, contr in enumerate(self.__la_tau_contr):
+        for i, contr in enumerate(self.__Wla_tau_q_contr):
             coo[i, contr.uDOF, contr.qDOF] = contr.Wla_tau_q(
                 t, q[contr.qDOF], u[contr.uDOF]
             )
         return coo.asformat(format, fix_size=True)
 
+    def Wla_tau_u_jax(self, t, q, u):
+        vals = [
+            contr.Wla_tau_u_jax(t, q[contr.qDOF], u[contr.uDOF])
+            for contr in self.__Wla_tau_u_contr
+        ]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
+
     def Wla_tau_u(self, t, q, u, format="coo", coo=None):
         if coo is None:
             coo = CooMatrix((self.nu, self.nu))
-        for i, contr in enumerate(self.__la_tau_contr):
+        for i, contr in enumerate(self.__Wla_tau_u_contr):
             coo[i, contr.uDOF, contr.uDOF] = contr.Wla_tau_u(
                 t, q[contr.qDOF], u[contr.uDOF]
             )
@@ -580,11 +743,21 @@ class System:
     #########################################
     # bilateral constraints on position level
     #########################################
+    def g_jax(self, t, q):
+        g = jnp.zeros(self.nla_g, dtype=float)
+        for contr in self.__g_contr:
+            g = g.at[contr.la_gDOF].set(contr.g_jax(t, q[contr.qDOF]))
+        return g
+
     def g(self, t, q):
         g = np.zeros(self.nla_g, dtype=q.dtype)
         for contr in self.__g_contr:
             g[contr.la_gDOF] = contr.g(t, q[contr.qDOF])
         return g
+
+    def g_q_jax(self, t, q):
+        vals = [contr.g_q_jax(t, q[contr.qDOF]) for contr in self.__g_contr]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
 
     def g_q(self, t, q, format="coo", coo=None):
         if coo is None:
@@ -602,12 +775,23 @@ class System:
             )
         return coo.asformat(format, fix_size=True)
 
+    def W_g_jax(self, t, q):
+        vals = [contr.W_g_jax(t, q[contr.qDOF]) for contr in self.__g_contr]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
+
     def W_g(self, t, q, format="coo", coo=None):
         if coo is None:
             coo = CooMatrix((self.nu, self.nla_g))
         for i, contr in enumerate(self.__g_contr):
             coo[i, contr.uDOF, contr.la_gDOF] = contr.W_g(t, q[contr.qDOF])
         return coo.asformat(format, fix_size=True)
+
+    def Wla_g_q_jax(self, t, q, la_g):
+        vals = [
+            contr.Wla_g_q_jax(t, q[contr.qDOF], la_g[contr.la_gDOF])
+            for contr in self.__g_contr
+        ]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
 
     def Wla_g_q(self, t, q, la_g, format="coo", coo=None):
         if coo is None:
@@ -617,6 +801,14 @@ class System:
                 t, q[contr.qDOF], la_g[contr.la_gDOF]
             )
         return coo.asformat(format, fix_size=True)
+
+    def g_dot_jax(self, t, q, u):
+        g_dot = jnp.zeros(self.nla_g, dtype=float)
+        for contr in self.__g_contr:
+            g_dot = g_dot.at[contr.la_gDOF].set(
+                contr.g_dot_jax(t, q[contr.qDOF], u[contr.uDOF])
+            )
+        return g_dot
 
     def g_dot(self, t, q, u):
         g_dot = np.zeros(self.nla_g, dtype=float)
@@ -628,12 +820,23 @@ class System:
     def chi_g(self, t, q):
         return self.g_dot(t, q, np.zeros(self.nu))
 
+    def g_dot_u_jax(self, t, q):
+        vals = [contr.g_dot_u_jax(t, q[contr.qDOF]) for contr in self.__g_contr]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
+
     def g_dot_u(self, t, q, format="coo", coo=None):
         if coo is None:
             coo = CooMatrix((self.nla_g, self.nu))
         for i, contr in enumerate(self.__g_contr):
             coo[i, contr.la_gDOF, contr.uDOF] = contr.g_dot_u(t, q[contr.qDOF])
         return coo.asformat(format, fix_size=True)
+
+    def g_dot_q_jax(self, t, q, u):
+        vals = [
+            contr.g_dot_q_jax(t, q[contr.qDOF], u[contr.uDOF])
+            for contr in self.__g_contr
+        ]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
 
     def g_dot_q(self, t, q, u, format="coo", coo=None):
         if coo is None:
@@ -734,11 +937,21 @@ class System:
     #####################################################
     # stabilization conditions for the kinematic equation
     #####################################################
+    def g_S_jax(self, t, q):
+        g_S = jnp.zeros(self.nla_S, dtype=q.dtype)
+        for contr in self.__g_S_contr:
+            g_S = g_S.at[contr.la_SDOF].set(contr.g_S_jax(t, q[contr.qDOF]))
+        return g_S
+
     def g_S(self, t, q):
         g_S = np.zeros(self.nla_S, dtype=q.dtype)
         for contr in self.__g_S_contr:
             g_S[contr.la_SDOF] = contr.g_S(t, q[contr.qDOF])
         return g_S
+
+    def g_S_q_jax(self, t, q):
+        vals = [contr.g_S_q_jax(t, q[contr.qDOF]) for contr in self.__g_S_contr]
+        return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
 
     def g_S_q(self, t, q, format="coo", coo=None):
         if coo is None:
