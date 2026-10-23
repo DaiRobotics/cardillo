@@ -7,6 +7,7 @@ from cardillo.math import norm, cross3, ax2skew
 from cardillo.math.approx_fprime import approx_fprime
 from cardillo.math.rotations import Exp_SO3_quat, T_SO3_inv_quat, T_SO3_inv_quat_P
 from cardillo.utility.coo_matrix import CooMatrix
+from cardillo.contributions import CContribution
 
 from ._base_export import RodExportBase
 from ._cross_section import CrossSectionInertias
@@ -1114,7 +1115,7 @@ class CosseratRodDisplacementBased(CosseratRod_PetrovGalerkin):
         return B_Gamma - B_Gamma0, B_Kappa - B_Kappa0
 
 
-class CosseratRodMixed(CosseratRod_PetrovGalerkin):
+class CosseratRodMixed(CosseratRod_PetrovGalerkin, CContribution):
     def __init__(
         self,
         cross_section,
@@ -1185,7 +1186,8 @@ class CosseratRodMixed(CosseratRod_PetrovGalerkin):
         """
 
         # call base class CosseratRod
-        super().__init__(
+        CosseratRod_PetrovGalerkin.__init__(
+            self,
             cross_section,
             material_model,
             nelement,
@@ -1254,6 +1256,8 @@ class CosseratRodMixed(CosseratRod_PetrovGalerkin):
 
         # evaluate shape functions at specific xi
         self.basis_functions_la_c = self.mesh_la_c.eval_basis
+
+        CContribution.__init__(self, self.nla_c)
 
     def assembler_callback(self):
         super().assembler_callback()

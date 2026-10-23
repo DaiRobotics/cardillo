@@ -8,7 +8,7 @@ class SolverOptions:
     fixed_point_atol: float = 1e-6
     fixed_point_rtol: float = 1e-6
     fixed_point_max_iter: int = int(1e3)
-    newton_atol: float = 1e-10
+    newton_atol: float = 1e-6  # 1e-10
     newton_rtol: float = 1e-6
     newton_max_iter: int = 20
     reuse_lu_decomposition: bool = True

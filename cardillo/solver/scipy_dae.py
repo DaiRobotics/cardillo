@@ -215,7 +215,7 @@ class ScipyDAE:
         q, u = self.system.step_callback(t, q, u)
         return 1
 
-    def _fun_jax(self, t, y, yp):
+    def _fun_jax(self, t, y, yp, tau):
         sys = self.system
         # unpack vectors
         s0, s1, s2, s3, s4 = self.split
@@ -247,13 +247,11 @@ class ScipyDAE:
         # equations of motion
         ####################
         F = F.at[s0:s1].add(
-            coo_matvec_jit(
-                sys.M_jax_row, sys.M_jax_col, sys.M_jax(t, q), u_dot, sys.nu
-            )
+            coo_matvec_jit(sys.M_jax_row, sys.M_jax_col, sys.M_jax(t, q), u_dot, sys.nu)
         )
         F = F.at[s0:s1].subtract(sys.h_jax(t, q, u))
         if sys.nla_tau:
-            la_tau = sys.la_tau_jax(t, q, u)
+            la_tau = sys.la_tau_jax(t, q, u, tau)
             F = F.at[s0:s1].subtract(
                 coo_matvec_jit(
                     sys.W_tau_jax_row,
@@ -299,6 +297,7 @@ class ScipyDAE:
 
     def fun(self, t, y, yp):
         t = float(t)
+        tau = self.system.tau(t)
         # update progress bar
         if self.verbose:
             pbar_i = int(np.floor((t + self.frac / 2) / self.frac))
@@ -309,7 +308,7 @@ class ScipyDAE:
             self.pbar_i = pbar_i
 
         if self.system._jaxed:
-            return self._fun_jit(t, y, yp)
+            return self._fun_jit(t, y, yp, tau)
         # unpack vectors
         s0, s1, s2, s3, s4 = self.split
         q, u = y[:s0], y[s0:s1]
@@ -325,22 +324,20 @@ class ScipyDAE:
         # residual
         F = self.F
         sys = self.system
-        h = self.h = self.system.h(t, q, u, format="Coo", coo=self.h)
-        c = self.c = self.system.c(t, q, u, la_c, format="Coo", coo=self.c)
-        q_dot2 = self.q_dot = self.system.q_dot(t, q, u, format="Coo", coo=self.q_dot)
+        h = self.h = sys.h(t, q, u, format="Coo", coo=self.h)
+        c = self.c = sys.c(t, q, u, la_c, format="Coo", coo=self.c)
+        q_dot2 = self.q_dot = sys.q_dot(t, q, u, format="Coo", coo=self.q_dot)
         if self.nla_g:
-            g_q = self.g_q1 = self.system.g_q(t, q, format="Coo", coo=self.g_q1)
+            g_q = self.g_q1 = sys.g_q(t, q, format="Coo", coo=self.g_q1)
             g_q_T = self.g_q1_T = g_q.transpose(copy=False, coo=self.g_q1_T)
         if sys.nla_tau:
-            W_tau = self._W_tau = self.system.W_tau(t, q, format="Coo", coo=self._W_tau)
+            W_tau = self._W_tau = sys.W_tau(t, q, format="Coo", coo=self._W_tau)
         if sys.nla_g:
-            W_g = self.W_g1 = self.system.W_g(t, q, format="Coo", coo=self.W_g1)
+            W_g = self.W_g1 = sys.W_g(t, q, format="Coo", coo=self.W_g1)
         if sys.nla_gamma:
-            W_gamma = self.W_gamma1 = self.system.W_gamma(
-                t, q, format="Coo", coo=self.W_gamma1
-            )
+            W_gamma = self.W_gamma1 = sys.W_gamma(t, q, format="Coo", coo=self.W_gamma1)
         if sys.nla_c:
-            W_c = self.W_c1 = self.system.W_c(t, q, format="Coo", coo=self.W_c1)
+            W_c = self.W_c1 = sys.W_c(t, q, format="Coo", coo=self.W_c1)
         ####################
         # kinematic equation
         ####################
@@ -353,14 +350,14 @@ class ScipyDAE:
         ####################
         # equations of motion
         ####################
-        M = self.M2 = self.system.M(t, q, format="Coo", coo=self.M2)
+        M = self.M2 = sys.M(t, q, format="Coo", coo=self.M2)
         F["Mu", 0, s0:s1] = M.tocsr(fix_size=True) @ u_dot
         F["h", 0, s0:s1, True] = h
         if sys.nla_tau:
             W_tau.manual_sync()
-            F["Wla_tau", 0, s0:s1, True] = W_tau.tocsr(
-                fix_size=True
-            ) @ self.system.la_tau(t, q, u)
+            F["Wla_tau", 0, s0:s1, True] = W_tau.tocsr(fix_size=True) @ sys.la_tau(
+                t, q, u, tau
+            )
         if sys.nla_g:
             W_g.manual_sync()
             F["Wla_g", 0, s0:s1, True] = W_g.tocsr(fix_size=True) @ la_g
@@ -374,11 +371,11 @@ class ScipyDAE:
         # bilateral constraints
         #######################
         if sys.nla_g:
-            F["g", 0, s1:s2] = self.system.g(t, q)
-            F["g_dot", 0, s2:s3] = self.system.g_dot(t, q, u)
+            F["g", 0, s1:s2] = sys.g(t, q)
+            F["g_dot", 0, s2:s3] = sys.g_dot(t, q, u)
 
         if sys.nla_gamma:
-            F["gamma", 0, s3:s4] = self.system.gamma(t, q, u)
+            F["gamma", 0, s3:s4] = sys.gamma(t, q, u)
 
         ############
         # compliance
@@ -388,7 +385,7 @@ class ScipyDAE:
         F.manual_sync()
         return F.toarray(fix_size=True).ravel()
 
-    def _jac_jax(self, t, y, yp):
+    def _jac_jax(self, t, y, yp, tau):
         sys = self.system
 
         # unpack vectors
@@ -426,8 +423,8 @@ class ScipyDAE:
             c_q = c_u = W_c = Wla_c_q = c_la_c = np.array([], dtype=float)
 
         if sys.nla_tau:
-            Wla_tau_q = sys.Wla_tau_q_jax(t, q, u)
-            Wla_tau_u = sys.Wla_tau_u_jax(t, q, u)
+            Wla_tau_q = sys.Wla_tau_q_jax(t, q, u, tau)
+            Wla_tau_u = sys.Wla_tau_u_jax(t, q, u, tau)
         else:
             Wla_tau_q = Wla_tau_u = np.array([], dtype=float)
 
@@ -470,11 +467,12 @@ class ScipyDAE:
     def jac(self, t, y, yp):
         t = float(t)
         sys = self.system
+        tau = sys.tau(t)
 
         if sys._jaxed:
             Jy = self.Jy_jax
             Jyp = self.Jyp_jax
-            Jy.data, Jyp.data = self._jac_jit(t, y, yp)
+            Jy.data, Jyp.data = self._jac_jit(t, y, yp, tau)
             return Jy.tocsc(fix_size=True), Jyp.tocsc(fix_size=True)
 
         # unpack vectors
@@ -482,34 +480,34 @@ class ScipyDAE:
         q_dot, u_dot, mu_g, la_g, la_gamma, la_c = np.array_split(yp, self.split)
 
         # evaluate commonly used quantities
-        q_dot_q = self.system.q_dot_q(t, q, u)
-        q_dot_u = self.system.q_dot_u(t, q)
+        q_dot_q = sys.q_dot_q(t, q, u)
+        q_dot_u = sys.q_dot_u(t, q)
 
-        Mu_q = self.system.Mu_q(t, q, u_dot)
-        h_q = self.system.h_q(t, q, u)
-        h_u = self.system.h_u(t, q, u)
-        Wla_tau_q = self.system.Wla_tau_q(t, q, u)
-        Wla_tau_u = self.system.Wla_tau_u(t, q, u)
-        Wla_g_q = self.system.Wla_g_q(t, q, la_g)
-        Wla_gamma_q = self.system.Wla_gamma_q(t, q, la_gamma)
-        Wla_c_q = self.system.Wla_c_q(t, q, la_c)
+        Mu_q = sys.Mu_q(t, q, u_dot)
+        h_q = sys.h_q(t, q, u)
+        h_u = sys.h_u(t, q, u)
+        Wla_tau_q = sys.Wla_tau_q(t, q, u, tau)
+        Wla_tau_u = sys.Wla_tau_u(t, q, u, tau)
+        Wla_g_q = sys.Wla_g_q(t, q, la_g)
+        Wla_gamma_q = sys.Wla_gamma_q(t, q, la_gamma)
+        Wla_c_q = sys.Wla_c_q(t, q, la_c)
 
-        g_dot_q = self.system.g_dot_q(t, q, u)
-        g_dot_u = self.system.g_dot_u(t, q)
+        g_dot_q = sys.g_dot_q(t, q, u)
+        g_dot_u = sys.g_dot_u(t, q)
 
-        gamma_q = self.system.gamma_q(t, q, u)
-        gamma_u = self.system.gamma_u(t, q)
+        gamma_q = sys.gamma_q(t, q, u)
+        gamma_u = sys.gamma_u(t, q)
 
-        c_q = self.system.c_q(t, q, u, la_c)
-        c_u = self.system.c_u(t, q, u, la_c)
+        c_q = sys.c_q(t, q, u, la_c)
+        c_u = sys.c_u(t, q, u, la_c)
 
         eye_q = eye_array(self.nq)
-        M = self.system.M(t, q)
-        g_q = self.system.g_q(t, q)
-        W_g = self.system.W_g(t, q)
-        W_gamma = self.system.W_gamma(t, q)
-        W_c = self.system.W_c(t, q)
-        c_la_c = self.system.c_la_c()
+        M = sys.M(t, q)
+        g_q = sys.g_q(t, q)
+        W_g = sys.W_g(t, q)
+        W_gamma = sys.W_gamma(t, q)
+        W_c = sys.W_c(t, q)
+        c_la_c = sys.c_la_c()
 
         # first Jacobian w.r.t. y
         Jy = CooMatrix((self.ny, self.ny))

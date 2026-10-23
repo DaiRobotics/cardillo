@@ -2,9 +2,10 @@ import numpy as np
 from numpy import einsum, zeros
 from vtk import VTK_VERTEX
 from jax import jit, numpy as jnp
+from cardillo.contributions import HContribution
 
 
-class Force:
+class Force(HContribution):
     r"""Force represented w.r.t. I-basis
 
     Parameters
@@ -21,6 +22,7 @@ class Force:
     """
 
     def __init__(self, force, subsystem, xi=zeros(3), B_r_CP=zeros(3), name="force"):
+        HContribution.__init__(self)
         if not callable(force):
             self.force = lambda t: force
         else:

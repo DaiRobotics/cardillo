@@ -19,8 +19,12 @@ tend = 3.0
 ret = gen_cantilever_beam(rod="DiscreteRod")
 rod = ret["rod"]
 system = ret["system"]
+assert system._jaxed
 
 solver = ScipyDAE(system, tend, dt)
+
+solver.jac(0.0, solver.y0, solver.y0)
+solver.fun(0.0, solver.y0, solver.y0).block_until_ready()
 
 t0 = perf_counter()
 sol = solver.solve()

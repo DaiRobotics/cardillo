@@ -24,6 +24,7 @@ ret = gen_flying_spaghetti(nelement=nelement)
 system = ret["system"]
 rod = ret["rod"]
 t0 = system.t0
+assert system._jaxed
 
 #################
 # ScipyDAE solver

@@ -19,11 +19,11 @@ n_load_steps = 1
 ret = gen_helix(rod="DiscreteRod")
 rod1 = ret["rod"]
 system = ret["system"]
+assert system._jaxed
 
 solver = Newton(
     system,
     n_load_steps=n_load_steps,
-    options=SolverOptions(newton_max_iter=30, newton_atol=1e-10),
 )
 
 # warm up

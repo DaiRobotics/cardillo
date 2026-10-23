@@ -124,7 +124,6 @@ def gen_single_segment_tdcm(live_plotter=False):
             B_r_CPs=B_r_CP_list,
         )
         tendons.append(tendon)
-    tendons[0].la_tau = lambda t, q, u: t * 50
     system.add(*tendons)
     # ---- add to system ----
     system.add(rod)

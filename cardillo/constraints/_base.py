@@ -6,6 +6,7 @@ from jax import jit, numpy as jnp, jacrev
 from cardillo import math_jax as mj
 from cardillo.math_numba import ax2skew, cross3
 from cardillo.math.approx_fprime import approx_fprime
+from cardillo.contributions import GContribution
 
 
 def concatenate_qDOF(object):
@@ -187,7 +188,7 @@ def auxiliary_functions(
     )
 
 
-class PositionOrientationBase:
+class PositionOrientationBase(GContribution):
     def __init__(
         self,
         subsystem1,
@@ -217,6 +218,8 @@ class PositionOrientationBase:
         self.projection_pairs = projection_pairs_rotation
 
         self.constrain_orientation = self.nla_g_rot > 0
+
+        GContribution.__init__(self, self.nla_g)
 
         if "name" in kwargs:
             self.name = kwargs.get("name")

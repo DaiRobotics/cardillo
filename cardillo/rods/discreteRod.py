@@ -8,13 +8,13 @@ from vtk.util.numpy_support import numpy_to_vtk
 from jax import vmap, jit, jacrev
 from jax import numpy as jnp
 
+from cardillo.contributions import CContribution, HContribution
 from cardillo.math_numba import (
     norm,
     cross3,
     Log_SO3_quat,
 )
 from cardillo import math_jax as mj
-
 from cardillo.math import A_IB_basic
 from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.utility.check_time_derivatives import check_time_derivatives
@@ -361,7 +361,7 @@ class DiscreteRodExport(RuntimeVisualBase):
         self._update_ugrid(sol_i, strain=False)
 
 
-class DiscreteRod(DiscreteRodExport):
+class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
     def __init__(
         self,
         cross_section,
@@ -385,10 +385,20 @@ class DiscreteRod(DiscreteRodExport):
         self._damp_ratio = damping_ratio
         self._damping = damping_ratio > 0
 
+        # total DOFs
+        self.nq = 7 * self.nnode
+        self.nu = 6 * self.nnode
+        self.nla_S = self.nnode
+        self.nla_c = self.nelement * (6 if not self._damping else 12)
+
         # centerline parameter of nodes
         self.xi_node = np.linspace(0, 1, self.nnode)
 
-        super().__init__(nelement, self.xi_node, cross_section, **kwargs)
+        CContribution.__init__(self, self.nla_c)
+        DiscreteRodExport.__init__(
+            self, nelement, self.xi_node, cross_section, **kwargs
+        )
+        HContribution.__init__(self)
 
         # stiffness matrices
         assert (
@@ -419,12 +429,6 @@ class DiscreteRod(DiscreteRodExport):
             self.K_ka_damp_els = self.K_ka_els * self._damp_ratio
             self.C_n_damp_els = self.C_n_els / self._damp_ratio
             self.C_m_damp_els = self.C_m_els / self._damp_ratio
-
-        # total DOFs
-        self.nq = 7 * self.nnode
-        self.nu = 6 * self.nnode
-        self.nla_S = self.nnode
-        self.nla_c = self.nelement * (6 if not self._damping else 12)
 
         self.q0 = Q if q0 is None else np.asarray(q0)
         self.u0 = np.zeros(self.nu, dtype=float) if u0 is None else np.asarray(u0)
@@ -458,12 +462,12 @@ class DiscreteRod(DiscreteRodExport):
         # rod length
         self.L = np.sum(self.L_els)
 
+        self.__init_coo__(cross_section_inertias)
+
         self.__jit_func__()
 
         # reference strain
         _, self.B_gamma0, self.B_kappa0 = self._eval(Q)
-
-        self.__init_coo__(cross_section_inertias)
 
     def __jit_func__(self):
         self._eval = jit(
@@ -485,13 +489,19 @@ class DiscreteRod(DiscreteRodExport):
         self.__c_q_jit = jit(self.c_q_jax)
 
         if self._damping:
-            c_u_jit = jit(
-                lambda q, u: DiscreteRod._c_damp_u_els(
+
+            def c_u_jax(t, q, u, la_c):
+                return DiscreteRod._c_damp_u_els(
                     DiscreteRod._gen_element_q(q),
                     DiscreteRod._gen_element_u(u),
                     self.L_els,
                 ).ravel()
-            )
+
+            self.c_u_jax = c_u_jax
+            self.c_u_jax_row = self._c_u_coo.row
+            self.c_u_jax_col = self._c_u_coo.col
+
+            c_u_jit = jit(c_u_jax)
 
             def c_u(t, q, u, la_c):
                 self._c_u_coo.data = c_u_jit(q, u)

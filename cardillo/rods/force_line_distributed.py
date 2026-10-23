@@ -2,9 +2,10 @@ import numpy as np
 from jax import numpy as jnp
 
 from cardillo.rods import DiscreteRod
+from cardillo.contributions import HContribution, TauContribution
 
 
-class Force_line_distributed:
+class Force_line_distributed(HContribution):
 
     def __init__(self, force, rod):
         r"""Line distributed dead load for rods
@@ -18,6 +19,7 @@ class Force_line_distributed:
             Cosserat rod from Cardillo.
 
         """
+        HContribution.__init__(self)
         self.force = (lambda t, xi: force) if not callable(force) else force
         self.rod = rod
         try:
@@ -116,3 +118,49 @@ class Force_line_distributed:
                 )
 
         return he
+
+
+class RodGravity(TauContribution):
+
+    def __init__(self, rod, density, g_accel=9.81, g_direction=np.array([0, 0, -1])):
+        TauContribution.__init__(self, nla_tau=1, ntau=1)
+
+        assert isinstance(rod, DiscreteRod), "RodGravity only supports DiscreteRod."
+
+        self.rod = rod
+        self.density = density
+        self.g_accel = g_accel
+        self.direction = g_direction
+        self._jaxed = True
+
+        l_nodes = (np.pad(rod.L_els, (1, 0)) + np.pad(rod.L_els, (0, 1))) / 2
+        l_nodes = np.repeat(l_nodes, 3)
+
+        self._W_tau = l_nodes * np.concatenate(
+            [
+                density * rod.cross_section.area(xi) * g_accel * g_direction
+                for xi in rod.xi_node
+            ]
+        )
+
+    def assembler_callback(self):
+        self.qDOF = self.rod.qDOF
+        self.uDOF = self.rod.uDOF.reshape((-1, 6))[:, :3].ravel()
+
+        self.W_tau_jax_row = np.arange(len(self.uDOF), dtype=int)
+        self.W_tau_jax_col = np.zeros_like(self.W_tau_jax_row)
+
+    def W_tau_jax(self, t, q):
+        return self._W_tau
+
+    def W_tau(self, t, q):
+        return self._W_tau
+
+    def la_tau_jax(self, t, q, u, tau):
+        return tau
+
+    def la_tau(self, t, q, u, tau):
+        return tau
+
+    def tau(self, t):
+        return 0.0

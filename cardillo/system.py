@@ -8,6 +8,7 @@ from cardillo.discrete.frame import Frame
 from cardillo.discrete.meshed import Axis
 from cardillo.solver import consistent_initial_conditions
 from cardillo.visualization import Export
+from cardillo.contributions import GContribution, CContribution, TauContribution
 
 properties = []
 
@@ -241,11 +242,17 @@ class System:
             if hasattr(contr, "nla_c"):
                 contr.la_cDOF = np.arange(0, contr.nla_c) + self.nla_c
                 self.nla_c += contr.nla_c
+                assert isinstance(
+                    contr, CContribution
+                ), f"contribution {contr.name} has nla_c but is not a CContribution"
 
             # if contribution of actuator forces
             if hasattr(contr, "nla_tau"):
                 contr.la_tauDOF = np.arange(0, contr.nla_tau) + self.nla_tau
                 self.nla_tau += contr.nla_tau
+                assert isinstance(
+                    contr, TauContribution
+                ), f"contribution {contr.name} has nla_tau but is not a TauContribution"
 
             # if contribution of control inputs
             if hasattr(contr, "ntau"):
@@ -256,6 +263,9 @@ class System:
             if hasattr(contr, "nla_g"):
                 contr.la_gDOF = np.arange(0, contr.nla_g) + self.nla_g
                 self.nla_g += contr.nla_g
+                assert isinstance(
+                    contr, GContribution
+                ), f"contribution {contr.name} has nla_g but is not a GContribution"
 
             # if contribution has constraints on velocity level address constraint coordinates
             if hasattr(contr, "nla_gamma"):
@@ -669,50 +679,52 @@ class System:
             coo[i, contr.uDOF, contr.la_tauDOF] = contr.W_tau(t, q[contr.qDOF])
         return coo.asformat(format, fix_size=True)
 
-    def la_tau_jax(self, t, q, u):
+    def la_tau_jax(self, t, q, u, tau):
         la_tau = jnp.zeros(self.nla_tau, dtype=float)
         for contr in self.__la_tau_contr:
             la_tau = la_tau.at[contr.la_tauDOF].set(
                 # TODO use la_tau._jax
-                contr.la_tau(t, q[contr.qDOF], u[contr.uDOF])
+                contr.la_tau(t, q[contr.qDOF], u[contr.uDOF], tau[contr.tauDOF])
             )
         return la_tau
 
-    def la_tau(self, t, q, u):
+    def la_tau(self, t, q, u, tau):
         la_tau = np.zeros(self.nla_tau, dtype=float)
         for contr in self.__la_tau_contr:
-            la_tau[contr.la_tauDOF] = contr.la_tau(t, q[contr.qDOF], u[contr.uDOF])
+            la_tau[contr.la_tauDOF] = contr.la_tau(
+                t, q[contr.qDOF], u[contr.uDOF], tau[contr.tauDOF]
+            )
         return la_tau
 
-    def Wla_tau_q_jax(self, t, q, u):
+    def Wla_tau_q_jax(self, t, q, u, tau):
         vals = [
-            contr.Wla_tau_q_jax(t, q[contr.qDOF], u[contr.uDOF])
+            contr.Wla_tau_q_jax(t, q[contr.qDOF], u[contr.uDOF], tau[contr.tauDOF])
             for contr in self.__Wla_tau_q_contr
         ]
         return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
 
-    def Wla_tau_q(self, t, q, u, format="coo", coo=None):
+    def Wla_tau_q(self, t, q, u, tau, format="coo", coo=None):
         if coo is None:
             coo = CooMatrix((self.nu, self.nq))
         for i, contr in enumerate(self.__Wla_tau_q_contr):
             coo[i, contr.uDOF, contr.qDOF] = contr.Wla_tau_q(
-                t, q[contr.qDOF], u[contr.uDOF]
+                t, q[contr.qDOF], u[contr.uDOF], tau[contr.tauDOF]
             )
         return coo.asformat(format, fix_size=True)
 
-    def Wla_tau_u_jax(self, t, q, u):
+    def Wla_tau_u_jax(self, t, q, u, tau):
         vals = [
-            contr.Wla_tau_u_jax(t, q[contr.qDOF], u[contr.uDOF])
+            contr.Wla_tau_u_jax(t, q[contr.qDOF], u[contr.uDOF], tau[contr.tauDOF])
             for contr in self.__Wla_tau_u_contr
         ]
         return jnp.concatenate(vals) if len(vals) else jnp.array([], dtype=float)
 
-    def Wla_tau_u(self, t, q, u, format="coo", coo=None):
+    def Wla_tau_u(self, t, q, u, tau, format="coo", coo=None):
         if coo is None:
             coo = CooMatrix((self.nu, self.nu))
         for i, contr in enumerate(self.__Wla_tau_u_contr):
             coo[i, contr.uDOF, contr.uDOF] = contr.Wla_tau_u(
-                t, q[contr.qDOF], u[contr.uDOF]
+                t, q[contr.qDOF], u[contr.uDOF], tau[contr.tauDOF]
             )
         return coo.asformat(format, fix_size=True)
 
@@ -725,10 +737,10 @@ class System:
     def set_tau(self, tau):
         if callable(tau):
             for contr in self.__tau_contr:
-                contr.tau = lambda t: tau(t)[contr.tauDOF]
+                contr.tau = lambda t, dof=contr.tauDOF: tau(t)[dof]
         else:
             for contr in self.__tau_contr:
-                contr.tau = lambda t: tau[contr.tauDOF]
+                contr.tau = lambda t, dof=contr.tauDOF: tau[dof]
 
     def set_tau_from_dict(self, tau_dict):
         raise NotImplementedError

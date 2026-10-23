@@ -58,7 +58,7 @@ class Newton:
         self.u0 = np.zeros(system.nu)  # zero velocities as system is static
 
         self.n_load_steps = None
-        self.reset(x0, n_load_steps)
+        self.reset(x0=x0, n_load_steps=n_load_steps)
 
         if self.nla_N:
             raise NotImplementedError(
@@ -121,21 +121,24 @@ class Newton:
 
             self._fun_jit = jit(self._fun_jax)
 
-    def reset(self, x0=None, n_load_steps=None):
+    def reset(self, x0=None, *, f0=None, n_load_steps=None):
         if x0 is None:
             x0 = self.x[0]
+        self.f0 = f0.copy() if f0 is not None else None
 
         if n_load_steps is not None and n_load_steps != self.n_load_steps:
             self.n_load_steps = n_load_steps
             self.load_steps = np.linspace(0, 1, n_load_steps + 1)
             self.nt = len(self.load_steps)
             self.x = np.zeros((self.nt, self.nx), dtype=float)
+            self.f0 = None
+            self.f = np.zeros((self.nt, self.nx), dtype=float)
             self.len_t = len(str(self.nt))
             self.len_t = len(str(self.nt))
 
         self.x[0] = x0
 
-    def _fun_jax(self, x, t):
+    def _fun_jax(self, x, t, tau):
         sys = self.system
         c0, c1, c2 = self.split_x
         r0, r1, r2, r3 = self.split_f
@@ -158,7 +161,7 @@ class Newton:
         )
 
         if sys.nla_tau > 0:
-            la_tau = sys.la_tau_jax(t, q, self.u0)
+            la_tau = sys.la_tau_jax(t, q, self.u0, tau)
             F = F.at[:r0].add(
                 coo_matvec_jit(
                     sys.W_tau_jax_row,
@@ -177,10 +180,11 @@ class Newton:
 
     def fun(self, x, t):
         t = float(t)
-        if self.system._jaxed:
-            return self._fun_jit(x, t)
-
         sys = self.system
+        tau = sys.tau(t)
+        if sys._jaxed:
+            return self._fun_jit(x, t, tau)
+
         c0, c1, c2 = self.split_x
         r0, r1, r2, r3 = self.split_f
         # unpack unknowns
@@ -209,7 +213,7 @@ class Newton:
         F["Wla_c", 0, :r0] = W_c.tocsr(fix_size=True) @ la_c
 
         W_tau.manual_sync()
-        la_tau = sys.la_tau(t, q, self.u0)
+        la_tau = sys.la_tau(t, q, self.u0, tau)
         F["Wla_tau", 0, :r0] = W_tau.tocsr(fix_size=True) @ la_tau
 
         if self.nla_N:
@@ -227,7 +231,7 @@ class Newton:
         F.manual_sync()
         return F.toarray(fix_size=True).ravel()
 
-    def _jac_jax(self, x, t):
+    def _jac_jax(self, x, t, tau):
         sys = self.system
         c0, c1, c2 = self.split_x
         q, la_g, la_c, la_N = x[:c0], x[c0:c1], x[c1:c2], x[c2:]
@@ -235,7 +239,7 @@ class Newton:
             [
                 sys.Wla_g_q_jax(t, q, la_g),
                 sys.Wla_c_q_jax(t, q, la_c),
-                sys.Wla_tau_q_jax(t, q, self.u0),
+                sys.Wla_tau_q_jax(t, q, self.u0, tau=tau),
                 sys.W_g_jax(t, q),
                 sys.W_c_jax(t, q),
                 sys.h_q_jax(t, q, self.u0),
@@ -248,11 +252,12 @@ class Newton:
 
     def jac(self, x, t):
         t = float(t)
+        sys = self.system
+        tau = sys.tau(t)
         if self.system._jaxed:
             jac = self._jac_coo_jax
-            jac.data = self._jac_jit(x, t)
+            jac.data = self._jac_jit(x, t, tau)
             return jac.tocsc(fix_size=True)
-        sys = self.system
         c0, c1, c2 = self.split_x
         r0, r1, r2, r3 = self.split_f
         # unpack unknowns
@@ -271,7 +276,7 @@ class Newton:
             t, q, la_c, format="Coo", coo=self._Wla_c_q_coo
         )
         Wla_tau_q = self._Wla_tau_q_coo = sys.Wla_tau_q(
-            t, q, self.u0, format="Coo", coo=self._Wla_tau_q_coo
+            t, q, self.u0, tau, format="Coo", coo=self._Wla_tau_q_coo
         )
         g_q = self._g_q_coo = sys.g_q(t, q, format="Coo", coo=self._g_q_coo)
         g_S_q = self._g_S_q_coo = sys.g_S_q(t, q, format="Coo", coo=self._g_S_q_coo)
@@ -337,11 +342,12 @@ class Newton:
         pbar = range(0, self.nt)
         if self.verbose:
             pbar = tqdm(pbar, leave=True)
-
+        f0 = self.f0.copy() if self.f0 is not None else None
         for i in pbar:
             sol = fsolve(
                 self.fun,
                 self.x[i],
+                f0=f0,
                 jac=self.jac,
                 fun_args=(self.load_steps[i],),
                 jac_args=(self.load_steps[i],),
@@ -349,6 +355,7 @@ class Newton:
                 inexact=self.inexact,
             )
             self.x[i] = sol.x
+            self.f[i] = sol.fun
             if self.verbose:
                 pbar.set_description(self.__pbar_text(i, sol.nit, sol.error))
 
@@ -379,6 +386,7 @@ class Newton:
 
             # warm start for next step; store solution as new initial guess
             if i < self.nt - 1:
+                f0 = sol.fun
                 self.x[i + 1] = self.x[i]
 
         # return solution object

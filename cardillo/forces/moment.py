@@ -2,9 +2,10 @@ import numpy as np
 from numpy import einsum, zeros
 from vtk import VTK_VERTEX
 from jax import jit, numpy as jnp
+from cardillo.contributions import HContribution
 
 
-class B_Moment:
+class B_Moment(HContribution):
     r"""Moment represented w.r.t. body-fixed B-basis
 
     Parameters
@@ -19,6 +20,7 @@ class B_Moment:
     """
 
     def __init__(self, moment, subsystem, xi=zeros(3), name="B_moment"):
+        HContribution.__init__(self)
         if not callable(moment):
             self.moment = lambda t: moment
         else:
@@ -62,7 +64,7 @@ class B_Moment:
         return points, cells, None, cell_data
 
 
-class Moment:
+class Moment(HContribution):
     r"""Moment represented w.r.t. I-basis
 
     Parameters
@@ -77,6 +79,7 @@ class Moment:
     """
 
     def __init__(self, moment, subsystem, xi=zeros(3), name="moment"):
+        HContribution.__init__(self)
         if not callable(moment):
             self.moment = lambda t: moment
         else:

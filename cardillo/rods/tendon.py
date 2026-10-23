@@ -4,6 +4,7 @@ from vtk.util.numpy_support import numpy_to_vtk
 
 from jax import jit, numpy as jnp
 
+from cardillo.contributions import TauContribution
 from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.rods.discreteRod import ElementKinematics
 from cardillo.rods import DiscreteRod
@@ -202,19 +203,19 @@ class RodTendonKinematics(RodTendonExport):
         self.uDOF = np.concatenate([rod.uDOF[rod.elDOF_u[el]] for el in els])
 
 
-class RodTendonForce(RodTendonKinematics):
+class RodTendonForce(RodTendonKinematics, TauContribution):
     def __init__(
         self, rod: DiscreteRod, xis, B_r_CPs=None, name="tendon", color=(0, 200, 50)
     ) -> None:
-        super().__init__(rod, xis, B_r_CPs=B_r_CPs, name=name, color=color)
-
-        self.nla_tau = 1
+        TauContribution.__init__(self, nla_tau=1, ntau=1)
+        RodTendonKinematics.__init__(
+            self, rod, xis, B_r_CPs=B_r_CPs, name=name, color=color
+        )
 
         self._Wla_tau_q_coo = CooMatrix((self.n_vert * 12, self.n_vert * 14))
         self._Wla_tau_q_coo.col = self._W_t_q_coo.col.copy()
         self._Wla_tau_q_coo.row = self._W_t_q_coo.row.copy()
 
-        self.__W_tau_jit = jit(self.W_tau_jax)
         self.__Wla_tau_q_jit = jit(self.Wla_tau_q_jax)
 
     def assembler_callback(self):
@@ -232,60 +233,19 @@ class RodTendonForce(RodTendonKinematics):
     def W_tau(self, t, q):
         return self._W_t_jit(q)
 
-    def Wla_tau_q_jax(self, t, q, u):
-        la_tau = self.la_tau(t, q, u)
-        return self._W_t_q_jit(q) * la_tau
+    def Wla_tau_q_jax(self, t, q, u, tau):
+        return self._W_t_q_jit(q) * tau
 
-    def Wla_tau_q(self, t, q, u):
+    def Wla_tau_q(self, t, q, u, tau):
         coo = self._Wla_tau_q_coo
-        coo.data = self.__Wla_tau_q_jit(t, q, u)
+        coo.data = self.__Wla_tau_q_jit(t, q, u, tau=tau)
         return coo
 
-    def la_tau_jax(self, t, q, u):
+    def la_tau_jax(self, t, q, u, tau):
+        return tau
+
+    def la_tau(self, t, q, u, tau):
+        return tau
+
+    def tau(self, t):
         return 0.0
-
-    def la_tau(self, t, q, u):
-        return 0.0
-
-    # @property
-    # def la_tau(self):
-    #     return JaxProxy(self._la_tau, self._la_tau_jax)
-
-
-class RodTendonForceIntegrator(RodTendonKinematics):
-    def __init__(
-        self, rod: DiscreteRod, xis, B_r_CPs=None, name="tendon", color=(0, 200, 50)
-    ) -> None:
-        raise NotImplementedError
-        super().__init__(rod, xis, B_r_CPs=B_r_CPs, name=name, color=color)
-        self.nla_tau = 1
-        self.nq = 1
-        self.q0 = np.zeros(1)
-
-        def W_tau(t, q):
-            return self.W_t(q[:-1])
-
-        self.W_tau = W_tau
-
-        def Wla_tau_q(t, q, u):
-            coo = self.W_t_q_coo
-            coo.data = self.W_t_q_jit(q[:-1], self.la_tau(t, q, u))
-            return coo
-
-        self.Wla_tau_q = Wla_tau_q
-
-        self.Wla_tau_u = lambda t, q, u: None
-
-    def assembler_callback(self):
-        rod = self.rod
-        els = np.array([rod._element_number(xi) for xi in self.xis])
-        self.qDOF = np.concatenate(
-            [rod.qDOF[rod.elDOF[el]] for el in els] + [self.my_qDOF]
-        )
-        self.uDOF = np.concatenate([rod.uDOF[rod.elDOF_u[el]] for el in els])
-
-    def q_dot(self, t, q, u):
-        return 0.0
-
-    def la_tau(self, t, q, u):
-        return q[-1]
