@@ -132,7 +132,6 @@ def pinv_solve(A, b, rcond=1e-14, *args):
 def fsolve(
     fun,
     x0,
-    f0=None,
     jac=None,
     fun_args=(),
     jac_args=(),
@@ -229,14 +228,9 @@ def fsolve(
     tol_rel = options.newton_rtol
 
     # initial function value
-    if f0 is None:
-        f = np.atleast_1d(fun(x0))
-        error = error0 = norm(f) / f.size**0.5
-        converged = error < tol_abs
-    else:
-        f = np.atleast_1d(f0)
-        error = error0 = norm(f) / f.size**0.5
-        converged = False
+    f = np.atleast_1d(fun(x0))
+    error = error0 = norm(f) / f.size**0.5
+    converged = error < tol_abs
 
     x = x0.copy()
     if not converged:

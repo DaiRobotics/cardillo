@@ -122,21 +122,28 @@ class Newton:
             self._fun_jit = jit(self._fun_jax)
 
     def reset(self, x0=None, *, f0=None, n_load_steps=None):
-        if x0 is None:
-            x0 = self.x[0]
-        self.f0 = f0.copy() if f0 is not None else None
+        if x0 is not None:
+            if f0 is not None:
+                self._skip_first_step = True
+            else:
+                f0 = np.zeros_like(x0)
+                self._skip_first_step = False
+        elif f0 is not None:
+            raise ValueError("f0 cannot be specified without x0")
+
+        x0 = self.x[0] if x0 is None else x0
 
         if n_load_steps is not None and n_load_steps != self.n_load_steps:
             self.n_load_steps = n_load_steps
             self.load_steps = np.linspace(0, 1, n_load_steps + 1)
             self.nt = len(self.load_steps)
             self.x = np.zeros((self.nt, self.nx), dtype=float)
-            self.f0 = None
             self.f = np.zeros((self.nt, self.nx), dtype=float)
             self.len_t = len(str(self.nt))
             self.len_t = len(str(self.nt))
 
         self.x[0] = x0
+        self.f[0] = f0
 
     def _fun_jax(self, x, t, tau):
         sys = self.system
@@ -331,6 +338,14 @@ class Newton:
         #              [    c_q,     None,   c_la_c,       None],
         #              [  g_S_q,     None,     None,       None],], format="csc")
 
+    def warmup_jax(self):
+        """Warm up the jax functions to avoid compilation time in the first iteration."""
+        if self.system._jaxed:
+            self.fun(self.x[0], float(0))
+            self._fun_jit(self.x[0], float(0), self.system.tau(0)).block_until_ready()
+            self.jac(self.x[0], float(0))
+            self._jac_jit(self.x[0], float(0), self.system.tau(0)).block_until_ready()
+
     def __pbar_text(self, force_iter, newton_iter, error):
         return (
             f" force iter {force_iter+1:>{self.len_t}d}/{self.nt};"
@@ -342,15 +357,16 @@ class Newton:
         pbar = range(0, self.nt)
         if self.verbose:
             pbar = tqdm(pbar, leave=True)
-        f0 = self.f0.copy() if self.f0 is not None else None
         for i in pbar:
+            if self._skip_first_step:
+                continue
+            ti = self.load_steps[i]
             sol = fsolve(
                 self.fun,
                 self.x[i],
-                f0=f0,
                 jac=self.jac,
-                fun_args=(self.load_steps[i],),
-                jac_args=(self.load_steps[i],),
+                fun_args=(ti,),
+                jac_args=(ti,),
                 options=self.options,
                 inexact=self.inexact,
             )
@@ -381,12 +397,11 @@ class Newton:
 
             # solver step callback
             self.x[i, : self.split_x[0]], _ = self.system.step_callback(
-                self.load_steps[i], self.x[i, : self.split_x[0]], self.u0
+                ti, self.x[i, : self.split_x[0]], self.u0
             )
 
             # warm start for next step; store solution as new initial guess
             if i < self.nt - 1:
-                f0 = sol.fun
                 self.x[i + 1] = self.x[i]
 
         # return solution object

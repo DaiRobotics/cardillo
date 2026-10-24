@@ -729,7 +729,7 @@ class System:
         return coo.asformat(format, fix_size=True)
 
     def tau(self, t):
-        tau = np.zeros(self.ntau)
+        tau = np.zeros(self.ntau, float)
         for contr in self.__tau_contr:
             tau[contr.tauDOF] = contr.tau(t)
         return tau
