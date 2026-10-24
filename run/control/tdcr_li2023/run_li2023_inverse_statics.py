@@ -4,8 +4,12 @@ from matplotlib import pyplot as plt
 
 from cardillo.utility.jax_cache_config import configure_cache
 
+
+from tqdm import tqdm
+
 configure_cache("run_tdcr_li2023")
 
+from cardillo.solver.radau_dae import solve_dae
 from cardillo.solver import Newton, ScipyDAE, Solution
 from cardillo.visualization import Plotter
 
@@ -251,9 +255,6 @@ if __name__ == "__main__":
         verbose=False,
     )
 
-    from scipy_dae.integrate import solve_dae
-    from tqdm import tqdm
-
     # solver_summary = SolverSummary(f"Scipy solve_dae with method '{self.method}'")
     y0 = solver.y0
     yp0 = solver.y_dot0
@@ -276,7 +277,10 @@ if __name__ == "__main__":
         u = y0[split[0] : split[1]]
 
         # static jacobian estimation
-        if i == 0 or np.sqrt(np.mean((la_t - system_stat.tau(1)[:-1]) ** 2)) > la_t_skip_tol:
+        if (
+            i == 0
+            or np.sqrt(np.mean((la_t - system_stat.tau(1)[:-1]) ** 2)) > la_t_skip_tol
+        ):
             sol_last, r_OP_pred, dr_OP_dla_t = forward_statics(
                 la_t,
                 active_gravity=active_gravity,
@@ -321,6 +325,7 @@ if __name__ == "__main__":
             atol=solver.atol,
             events=[solver.event],
             jac=solver.jac,
+            fun_vec=solver._fun_vec_jit,
             **solver.kwargs,
         )
 

@@ -282,7 +282,7 @@ if __name__ == "__main__":
         verbose=False,
     )
 
-    from scipy_dae.integrate import solve_dae
+    from cardillo.solver.radau_dae import solve_dae
     from tqdm import tqdm
 
     y0 = solver.y0

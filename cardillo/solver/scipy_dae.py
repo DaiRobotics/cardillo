@@ -1,12 +1,13 @@
 import numpy as np
 from scipy.sparse import eye_array
-from scipy_dae.integrate import solve_dae
 from tqdm import tqdm
-from jax import jit, numpy as jnp
+from jax import jit, numpy as jnp, vmap
 
 from cardillo.solver import Solution, SolverSummary
 from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.utility.jaxproxy import coo_matvec_jit
+
+from .radau_dae import solve_dae
 
 
 # TODO:
@@ -138,6 +139,14 @@ class ScipyDAE:
             s0, s1, s2, s3, s4 = self.split
             self._fun_jit = jit(self._fun_jax)
             self._jac_jit = jit(self._jac_jax)
+
+            _fun_vmap = jit(vmap(self._fun_jax))
+
+            def _fun_vec_jit(T, Y, Yp):
+                tau = np.vstack([self.system.tau(ti) for ti in T])
+                return _fun_vmap(T, Y, Yp, tau)
+
+            self._fun_vec_jit = _fun_vec_jit
 
             if not system.constant_mass_matrix:
                 raise NotImplementedError("Variable mass matrix not implemented yet.")
@@ -590,6 +599,7 @@ class ScipyDAE:
             atol=self.atol,
             events=[self.event],
             jac=self.jac,
+            fun_vec=self._fun_vec_jit if self.system._jaxed else None,
             **self.kwargs,
         )
         if self.verbose:
