@@ -124,14 +124,16 @@ class Newton:
     def reset(self, x0=None, *, f0=None, n_load_steps=None):
         if x0 is not None:
             if f0 is not None:
-                self._skip_first_step = True
+                self._warm_start = True
             else:
                 f0 = np.zeros_like(x0)
-                self._skip_first_step = False
-        elif f0 is not None:
-            raise ValueError("f0 cannot be specified without x0")
-
-        x0 = self.x[0] if x0 is None else x0
+                self._warm_start = False
+        else:
+            if f0 is not None:
+                raise ValueError("f0 cannot be specified without x0")
+            x0 = self.x[0]
+            f0 = self.f[0]
+            self._warm_start = False
 
         if n_load_steps is not None and n_load_steps != self.n_load_steps:
             self.n_load_steps = n_load_steps
@@ -357,8 +359,11 @@ class Newton:
         pbar = range(0, self.nt)
         if self.verbose:
             pbar = tqdm(pbar, leave=True)
+        _skip = self._warm_start
         for i in pbar:
-            if self._skip_first_step:
+            if _skip:
+                self.x[1] = self.x[0]
+                _skip = False
                 continue
             ti = self.load_steps[i]
             sol = fsolve(
