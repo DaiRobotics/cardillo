@@ -24,13 +24,14 @@ ret = gen_flying_spaghetti(nelement=nelement)
 system = ret["system"]
 rod = ret["rod"]
 t0 = system.t0
+assert system._jaxed
 
 #################
 # ScipyDAE solver
 #################
 solver = ScipyDAE(system, tend, dt, rtol=1e-3, atol=1e-6)
-solver.fun(system.t0, solver.y0, solver.y0)
-solver.jac(system.t0, solver.y0, solver.y0)
+
+solver.warmup_jax()
 t1 = perf_counter()
 sol1 = solver.solve()
 print(f"ScipyDAE time: {perf_counter() - t1:.2f} s")

@@ -8,13 +8,13 @@ from vtk.util.numpy_support import numpy_to_vtk
 from jax import vmap, jit, jacrev
 from jax import numpy as jnp
 
+from cardillo.contributions import CContribution, HContribution
 from cardillo.math_numba import (
     norm,
     cross3,
     Log_SO3_quat,
 )
 from cardillo import math_jax as mj
-
 from cardillo.math import A_IB_basic
 from cardillo.utility.coo_matrix import CooMatrix
 from cardillo.utility.check_time_derivatives import check_time_derivatives
@@ -62,6 +62,108 @@ def _combine_indices(rows_list, cols_list):
         rows_combined[ptr[i] : ptr[i + 1]] = rows.repeat(len(cols))
         cols_combined[ptr[i] : ptr[i + 1]] = np.tile(cols, len(rows))
     return ptr, rows_combined, cols_combined
+
+
+class NodeKinematics(ABC):
+
+    @staticmethod
+    @jit
+    def r_OP(q, B_r_CP):
+        r_OC = q[:3]
+        A_IB = NodeKinematics.A_IB(q)
+        return r_OC + A_IB @ B_r_CP
+
+    @staticmethod
+    @jit
+    def r_OP_q(q, B_r_CP):
+        A_IB_q = NodeKinematics.A_IB_q(q)
+        r_OC_q = jnp.concatenate([E3, Z34], axis=1)
+        return r_OC_q + B_r_CP @ A_IB_q
+
+    @staticmethod
+    @jit
+    def v_P(q, u, B_r_CP):
+        A_IB = NodeKinematics.A_IB(q)
+        B_Omega = NodeKinematics.B_Omega(u)
+        v_C = u[:3]
+        return v_C + A_IB @ mj.cross3(B_Omega, B_r_CP)
+
+    @staticmethod
+    @jit
+    def v_P_q(q, u, B_r_CP):
+        A_IB_q = NodeKinematics.A_IB_q(q)
+        B_Omega = NodeKinematics.B_Omega(u)
+        return mj.cross3(B_Omega, B_r_CP) @ A_IB_q
+
+    @staticmethod
+    @jit
+    def J_P(q, B_r_CP):
+        A_IB = NodeKinematics.A_IB(q)
+        B_r_CP_tilde = mj.ax2skew(B_r_CP)
+        r_CP_tilde = A_IB @ B_r_CP_tilde
+
+        return jnp.concatenate([E3, -r_CP_tilde], axis=1)
+
+    @staticmethod
+    @jit
+    def J_P_q(q, B_r_CP):
+        A_IB_q = NodeKinematics.A_IB_q(q)
+        B_r_CP_tilde = mj.ax2skew(B_r_CP)
+        r_CP_tilde_q = B_r_CP_tilde.T @ A_IB_q
+
+        Z = jnp.zeros((3, 3, 7))
+        J_P_q = jnp.concatenate([Z, -r_CP_tilde_q], axis=1)  # (3,6,7)
+        return J_P_q
+
+    @staticmethod
+    @jit
+    def a_P(q, u, u_dot, B_r_CP):
+        A_IB = NodeKinematics.A_IB(q)
+        B_Omega = NodeKinematics.B_Omega(u)
+        B_Psi = NodeKinematics.B_Psi(u_dot)
+        a_C = u_dot[:3]
+        return a_C + A_IB @ (
+            mj.cross3(B_Psi, B_r_CP) + mj.cross3(B_Omega, mj.cross3(B_Omega, B_r_CP))
+        )
+
+    @staticmethod
+    @jit
+    def A_IB(q):
+        return mj.Exp_SO3_quat(q[3:])
+
+    @staticmethod
+    @jit
+    def A_IB_q(q):
+        p = q[3:7]
+        A_P = mj.Exp_SO3_quat_P(p)
+
+        A_IB_q = jnp.concatenate([jnp.zeros((3, 3, 3)), A_P], axis=-1)  # (3,3,7)
+
+        return A_IB_q
+
+    @staticmethod
+    @jit
+    def B_Omega(u):
+        return u[3:6]
+
+    @staticmethod
+    @jit
+    def B_Psi(u_dot):
+        """Since we use Petrov-Galerkin method we only interpolate the nodal
+        time derivative of the angular velocities in the B-frame.
+        """
+        return u_dot[3:6]
+
+    r_OP_batch = jit(vmap(r_OP.__func__))
+    r_OP_q_batch = jit(vmap(r_OP_q.__func__))
+    J_P_batch = jit(vmap(J_P.__func__))
+    J_P_q_batch = jit(vmap(J_P_q.__func__))
+
+    B_J_R = jnp.array([[0, 0, 0, 1, 0, 0], [0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 0, 1]])
+    B_Omega_q = jnp.zeros((3, 7))
+    B_J_R_q = jnp.zeros((3, 6, 7))
+    B_Psi_q = jnp.zeros((3, 7))
+    B_Psi_u = jnp.zeros((3, 6))
 
 
 class ElementKinematics(ABC):
@@ -130,9 +232,15 @@ class ElementKinematics(ABC):
         B_r_CP_tilde = mj.ax2skew(B_r_CP)
         r_CP_tilde_q = B_r_CP_tilde.T @ A_IB_q
 
-        J_P_q = jnp.zeros((3, 12, 14))
-        J_P_q = J_P_q.at[:, 3:6].set(-(1.0 - alpha) * r_CP_tilde_q)
-        J_P_q = J_P_q.at[:, 9:12].set(-alpha * r_CP_tilde_q)
+        J_P_q = jnp.concatenate(
+            [
+                jnp.zeros((3, 3, 14)),
+                -(1.0 - alpha) * r_CP_tilde_q,
+                jnp.zeros((3, 3, 14)),
+                -alpha * r_CP_tilde_q,
+            ],
+            axis=1,
+        )
         return J_P_q
 
     @staticmethod
@@ -361,7 +469,7 @@ class DiscreteRodExport(RuntimeVisualBase):
         self._update_ugrid(sol_i, strain=False)
 
 
-class DiscreteRod(DiscreteRodExport):
+class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
     def __init__(
         self,
         cross_section,
@@ -385,10 +493,20 @@ class DiscreteRod(DiscreteRodExport):
         self._damp_ratio = damping_ratio
         self._damping = damping_ratio > 0
 
+        # total DOFs
+        self.nq = 7 * self.nnode
+        self.nu = 6 * self.nnode
+        self.nla_S = self.nnode
+        self.nla_c = self.nelement * (6 if not self._damping else 12)
+
         # centerline parameter of nodes
         self.xi_node = np.linspace(0, 1, self.nnode)
 
-        super().__init__(nelement, self.xi_node, cross_section, **kwargs)
+        CContribution.__init__(self, self.nla_c)
+        DiscreteRodExport.__init__(
+            self, nelement, self.xi_node, cross_section, **kwargs
+        )
+        HContribution.__init__(self)
 
         # stiffness matrices
         assert (
@@ -419,12 +537,6 @@ class DiscreteRod(DiscreteRodExport):
             self.K_ka_damp_els = self.K_ka_els * self._damp_ratio
             self.C_n_damp_els = self.C_n_els / self._damp_ratio
             self.C_m_damp_els = self.C_m_els / self._damp_ratio
-
-        # total DOFs
-        self.nq = 7 * self.nnode
-        self.nu = 6 * self.nnode
-        self.nla_S = self.nnode
-        self.nla_c = self.nelement * (6 if not self._damping else 12)
 
         self.q0 = Q if q0 is None else np.asarray(q0)
         self.u0 = np.zeros(self.nu, dtype=float) if u0 is None else np.asarray(u0)
@@ -458,12 +570,12 @@ class DiscreteRod(DiscreteRodExport):
         # rod length
         self.L = np.sum(self.L_els)
 
+        self.__init_coo__(cross_section_inertias)
+
         self.__jit_func__()
 
         # reference strain
         _, self.B_gamma0, self.B_kappa0 = self._eval(Q)
-
-        self.__init_coo__(cross_section_inertias)
 
     def __jit_func__(self):
         self._eval = jit(
@@ -485,13 +597,19 @@ class DiscreteRod(DiscreteRodExport):
         self.__c_q_jit = jit(self.c_q_jax)
 
         if self._damping:
-            c_u_jit = jit(
-                lambda q, u: DiscreteRod._c_damp_u_els(
+
+            def c_u_jax(t, q, u, la_c):
+                return DiscreteRod._c_damp_u_els(
                     DiscreteRod._gen_element_q(q),
                     DiscreteRod._gen_element_u(u),
                     self.L_els,
                 ).ravel()
-            )
+
+            self.c_u_jax = c_u_jax
+            self.c_u_jax_row = self._c_u_coo.row
+            self.c_u_jax_col = self._c_u_coo.col
+
+            c_u_jit = jit(c_u_jax)
 
             def c_u(t, q, u, la_c):
                 self._c_u_coo.data = c_u_jit(q, u)

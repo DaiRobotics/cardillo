@@ -19,8 +19,11 @@ tend = 3.0
 ret = gen_cantilever_beam(rod="DiscreteRod")
 rod = ret["rod"]
 system = ret["system"]
+assert system._jaxed
 
 solver = ScipyDAE(system, tend, dt)
+
+solver.warmup_jax()
 
 t0 = perf_counter()
 sol = solver.solve()
@@ -38,6 +41,7 @@ system = ret["system"]
 
 solver = ScipyDAE(system, tend, dt)
 
+solver.warmup_jax()
 t0 = perf_counter()
 sol = solver.solve()
 print(f"Cosserat rod time: {perf_counter() - t0:.2f} s")

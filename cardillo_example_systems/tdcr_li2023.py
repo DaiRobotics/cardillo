@@ -1,5 +1,7 @@
+from cardillo.system import System
+from cardillo.discrete import Frame
 from cardillo.constraints import RigidConnection
-from cardillo.rods.force_line_distributed import Force_line_distributed
+from cardillo.rods.force_line_distributed import RodGravity
 
 from cardillo.rods import (
     CircularCrossSection,
@@ -9,45 +11,34 @@ from cardillo.rods import (
     RodTendonKinematics,
     DiscreteRod,
 )
-from cardillo.system import System
 from cardillo.utility.coo_matrix import CooMatrix
+from cardillo.math import Exp_SO3_quat
 
 import numpy as np
 
 
-class Controller:
+class ControllerFeedbackLinearization:
     def __init__(
         self,
         rod,
         tendons: list[RodTendonKinematics],
+        Kd=0.0,
         Kp=0.0,
         name="controller",
     ) -> None:
         self.rod = rod
         self.tendons = tendons
         self.name = name
-        self.nq = self.nla_tau = len(tendons)
-        self.ntau = 3 * 2
-        self.q0 = np.zeros(self.nq, dtype=np.float64)
+        self.nla_tau = len(tendons)
+        self.ntau = 3 * 3
 
+        self.Kd = Kd
         self.Kp = Kp
-        self.dr_OP_dla_t_inv = np.zeros((self.nla_tau, 3))
-
-    def q_dot(self, t, q, u):
-        r_OP = q[-7 - self.nla_tau : -4 - self.nla_tau]
-        tau = self.tau(t)
-        r_OP_des, v_P_def = tau[:3], tau[3:6]
-        return self.dr_OP_dla_t_inv @ (v_P_def + (r_OP_des - r_OP) * self.Kp)
-
-    def q_dot_q(self, t, q, u):
-        coo = CooMatrix((self.nq, self._nq))
-        coo[:, -self.nla_tau - 7 : -self.nla_tau - 4] = self.dr_OP_dla_t_inv * (
-            -self.Kp
-        )
-        return coo
+        self.dla_t_dbeta = np.zeros((self.nla_tau, 3))
+        self.la_t_comp = np.zeros(self.nla_tau, dtype=np.float64)
 
     def W_tau(self, t, q):
-        W_tau = CooMatrix((self._nu, self._nq))
+        W_tau = CooMatrix((self._nu, self.nla_tau))
         for i, td, qDOF, uDOF in zip(
             range(self.nla_tau), self.tendons, self._td_qDOF, self._td_uDOF
         ):
@@ -66,17 +57,34 @@ class Controller:
             q_td = q[qDOF]
             W_t_q = td.W_t_q(q_td)
             coo[2 * i, uDOF, qDOF] = W_t_q * la_tau
-            coo[2 * i + 1, uDOF, -self.nla_tau + i] = td.W_t(q[qDOF])
+            coo[2 * i + 1, uDOF, -7:-4] = (
+                td.W_t(q[qDOF])[:, None] @ self.dla_t_dbeta[None, i] * (-self.Kp)
+            )
         return coo
 
     def Wla_tau_u(self, t, q, u):
-        return None
+        coo = CooMatrix((self._nu, self._nu))
+        for i, td, qDOF, uDOF in zip(
+            range(self.nla_tau),
+            self.tendons,
+            self._td_qDOF,
+            self._td_uDOF,
+        ):
+            coo[i, uDOF, -6:-3] = (
+                td.W_t(q[qDOF])[:, None] @ self.dla_t_dbeta[None, i] * (-self.Kd)
+            )
+        return coo
 
     def tau(self, t):
         return np.zeros(self.ntau, dtype=np.float64)
 
     def la_tau(self, t, q, u):
-        return q[-self.nla_tau :]
+        ref_traj = self.tau(t)
+        r_OP = q[-7:-4]
+        v_P = u[-6:-3]
+        r_OP_des, v_P_des, a_P_des = ref_traj[:3], ref_traj[3:6], ref_traj[6:9]
+        beta = a_P_des + self.Kd * (v_P_des - v_P) + self.Kp * (r_OP_des - r_OP)
+        return self.la_t_comp + self.dla_t_dbeta @ beta
 
     def assembler_callback(self):
         qDOF = self.rod.qDOF
@@ -90,14 +98,101 @@ class Controller:
             assert min(uDOF) <= min(td.uDOF) and max(uDOF) >= max(td.uDOF)
             self._td_uDOF.append(np.searchsorted(uDOF, td.uDOF))
 
-        self.qDOF = np.concatenate([qDOF, self.my_qDOF])
+        self.qDOF = qDOF
         self.uDOF = uDOF
         self._nq = len(self.qDOF)
         self._nu = len(self.uDOF)
 
 
+class ControllerInverseStatics:
+    def __init__(
+        self,
+        rod,
+        tendons: list[RodTendonKinematics],
+        Kp=0.0,
+        name="controller",
+    ) -> None:
+        self.rod = rod
+        self.tendons = tendons
+        self.name = name
+        self.nu = self.nla_tau = len(tendons)
+        # self.ntau = 3 * 2
+        self.u0 = np.zeros(self.nu, dtype=np.float64)
+
+        self.Kp = Kp
+        self.dr_OP_dla_t_inv = np.zeros((self.nla_tau, 3))
+
+    def M(self, t, q):
+        coo = CooMatrix((self._nu, self._nu))
+        coo[-self.nu :, -self.nu :] = np.eye(self.nu, dtype=np.float64) * 100
+        return coo
+
+    # def q_dot(self, t, q, u):
+    #     r_OP = q[-7 - self.nla_tau : -4 - self.nla_tau]
+    #     tau = self.tau(t)
+    #     r_OP_des, v_P_des = tau[:3], tau[3:6]
+    #     return self.dr_OP_dla_t_inv @ (v_P_des + (r_OP_des - r_OP) * self.Kp)
+
+    # def q_dot_q(self, t, q, u):
+    #     coo = CooMatrix((self.nq, self._nq))
+    #     coo[:, -self.nla_tau - 7 : -self.nla_tau - 4] = self.dr_OP_dla_t_inv * (
+    #         -self.Kp
+    #     )
+    #     return coo
+
+    # def W_tau(self, t, q):
+    #     W_tau = CooMatrix((self._nu, self.nla_tau))
+    #     for i, td, qDOF, uDOF in zip(
+    #         range(self.nla_tau), self.tendons, self._td_qDOF, self._td_uDOF
+    #     ):
+    #         W_tau[i, uDOF, i] = td.W_t(q[qDOF])
+    #     return W_tau
+
+    # def Wla_tau_q(self, t, q, u, tau):
+    #     coo = CooMatrix((self._nu, self._nq))
+    #     for i, td, la_tau, qDOF, uDOF in zip(
+    #         range(self.nla_tau),
+    #         self.tendons,
+    #         self.la_tau(t, q, u, tau),
+    #         self._td_qDOF,
+    #         self._td_uDOF,
+    #     ):
+    #         q_td = q[qDOF]
+    #         W_t_q = td.W_t_q(q_td)
+    #         coo[2 * i, uDOF, qDOF] = W_t_q * la_tau
+    #         coo[2 * i + 1, uDOF, -self.nla_tau + i] = td.W_t(q[qDOF])
+    #     return coo
+
+    # def tau(self, t):
+    #     return np.zeros(self.ntau, dtype=np.float64)
+
+    # def la_tau(self, t, q, u, tau):
+    #     return q[-self.nla_tau :]
+
+    def assembler_callback(self):
+        qDOF = self.rod.qDOF
+        uDOF = self.rod.uDOF
+
+        self._td_qDOF = []
+        self._td_uDOF = []
+        for td in self.tendons:
+            assert min(qDOF) <= min(td.qDOF) and max(qDOF) >= max(td.qDOF)
+            self._td_qDOF.append(np.searchsorted(qDOF, td.qDOF))
+            assert min(uDOF) <= min(td.uDOF) and max(uDOF) >= max(td.uDOF)
+            self._td_uDOF.append(np.searchsorted(uDOF, td.uDOF))
+
+        self.qDOF = qDOF
+        self.uDOF = np.concatenate([uDOF, self.my_uDOF])
+        self._nq = len(self.qDOF)
+        self._nu = len(self.uDOF)
+
+
 def gen_tdcr_li2023(
-    rod_nelement=10, g_accel=9.81, damping_ratio=0, statics=True, controller=False
+    rod_nelement=10,
+    rod_q0=None,
+    g_accel=9.81,
+    damping_ratio=0,
+    statics=True
 ):
     # ---- pysical parameters ----
     rod_l0 = 0.192  # [m] length of rod
@@ -124,17 +219,21 @@ def gen_tdcr_li2023(
     system = System()
 
     # ---- inital configuration ----
-    def r_OP(xi):
-        return np.array([xi * rod_l0, 0, 0], dtype=np.float64)
+    if rod_q0 is None:
 
-    A_IB = lambda xi: np.eye(3, dtype=np.float64)
-    q0 = DiscreteRod.pose_configuration(
-        rod_nelement,
-        r_OP,
-        A_IB,
-        r_OC0=rod_r_OC0,
-        A_IB0=rod_A_IB0,
-    )
+        def r_OP(xi):
+            return np.array([xi * rod_l0, 0, 0], dtype=np.float64)
+
+        A_IB = lambda xi: np.eye(3, dtype=np.float64)
+        q0 = DiscreteRod.pose_configuration(
+            rod_nelement,
+            r_OP,
+            A_IB,
+            r_OC0=rod_r_OC0,
+            A_IB0=rod_A_IB0,
+        )
+    else:
+        q0 = rod_q0.copy()
     Q = q0.copy()
 
     rod = DiscreteRod(
@@ -152,23 +251,19 @@ def gen_tdcr_li2023(
 
     # ---- external forces ----
     if statics:
-        rod_gravity = Force_line_distributed(
-            lambda t, xi: rod_density
-            * cross_section.area(xi)
-            * g_accel
-            * t
-            * np.array([0, 0, -1], dtype=np.float64),
+        rod_gravity = RodGravity(
             rod,
+            rod_density,
+            g_accel=g_accel,
+            g_direction=np.array([0, 0, -1]),
         )
     else:
-        rod_gravity = Force_line_distributed(
-            lambda t, xi: rod_density
-            * cross_section.area(xi)
-            * g_accel
-            * np.array([0, 0, -1], dtype=np.float64),
+        rod_gravity = RodGravity(
             rod,
+            rod_density,
+            g_accel=g_accel,
+            g_direction=np.array([0, 0, -1]),
         )
-    system.add(rod_gravity)
 
     # ---- tendons ----
     n_tendons = 4
@@ -189,26 +284,17 @@ def gen_tdcr_li2023(
     ]
     for B_r_CP_list in B_r_CP_lists:
         n_vert = len(B_r_CP_list)
-        if statics:
-            tendon = RodTendonForce(
-                rod,
-                xis=[i / (n_vert - 1) for i in range(n_vert)],
-                B_r_CPs=B_r_CP_list,
-            )
-        else:
-            tendon = RodTendonKinematics(
-                rod,
-                xis=[i / (n_vert - 1) for i in range(n_vert)],
-                B_r_CPs=B_r_CP_list,
-            )
+        tendon = RodTendonForce(
+            rod,
+            xis=[i / (n_vert - 1) for i in range(n_vert)],
+            B_r_CPs=B_r_CP_list,
+        )
         tendons.append(tendon)
 
-    system.add(rod, rc, *tendons)
-
-    # --- controller ---
-    if controller:
-        controller = Controller(rod, tendons)
-        system.add(controller)
+    # --- assemble system ---
+    system.add(rod, rc)
+    system.add(*tendons)
+    system.add(rod_gravity)
     system.assemble()
 
     return {
@@ -216,5 +302,4 @@ def gen_tdcr_li2023(
         "tendons": tendons,
         "rod": rod,
         "rod_gravity": rod_gravity,
-        "controller": controller,
     }

@@ -63,9 +63,6 @@ class Controller:
             coo[2 * i, uDOF, qDOF] = W_t_q * la_tau
         return coo
 
-    def Wla_tau_u(self, t, q, u):
-        return None
-
     def la_tau(self, t, q, u):
         return self._la_t
         # return np.array([0, 0, 0, 0, 1, 0], dtype=np.float64)

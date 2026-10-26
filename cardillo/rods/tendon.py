@@ -1,11 +1,13 @@
 import numpy as np
 import vtk
 from vtk.util.numpy_support import numpy_to_vtk
+from warnings import warn
 
 from jax import jit, numpy as jnp
 
+from cardillo.contributions import TauContribution
 from cardillo.utility.coo_matrix import CooMatrix
-from cardillo.rods.discreteRod import ElementKinematics
+from cardillo.rods.discreteRod import ElementKinematics, NodeKinematics
 from cardillo.rods import DiscreteRod
 from cardillo.visualization.vtk_render2 import RuntimeVisualBase
 
@@ -87,6 +89,19 @@ class RodTendonKinematics(RodTendonExport):
         )
 
         self._alpha_verts = np.array([self.rod._alpha(xi) for xi in self.xis])
+        self._alpha_verts = np.round(
+            self._alpha_verts, decimals=10
+        )  # avoid numerical issues with alpha=0 or 1
+
+        # determine if the tendon vertices are all at the element ends (alpha=0 or 1)
+        _simple_vert = True
+        for alpha in self._alpha_verts:
+            if alpha > 0 and alpha < 1:
+                _simple_vert = False
+                break
+        else:
+            self._alpha_verts = np.astype(self._alpha_verts, int)
+        self._vert_at_node = _simple_vert
 
         self._r_OP_verts_jit = jit(self._r_OP_verts_jax)
 
@@ -94,31 +109,42 @@ class RodTendonKinematics(RodTendonExport):
 
         self._W_t_q_jit = jit(self._W_t_q_jax)
 
-        self._W_t_q_coo = CooMatrix((self.n_vert * 12, self.n_vert * 14))
+        self._nq_el = _nq_el = 7 if _simple_vert else 14
+        self._nu_el = _nu_el = 6 if _simple_vert else 12
+        self._W_t_q_coo = CooMatrix((self.n_vert * _nu_el, self.n_vert * _nq_el))
         for k in range(self.n_vert):
-            u1, u2 = 12 * k, 12 * (k + 1)
-            q1, q2 = 14 * (k - 1), 14 * (k + 2)
+            u1, u2 = _nu_el * k, _nu_el * (k + 1)
+            q1, q2 = _nq_el * (k - 1), _nq_el * (k + 2)
             if k == 0:
                 q1 = 0
             elif k == self.n_vert - 1:
-                q2 = 14 * self.n_vert
+                q2 = _nq_el * self.n_vert
 
             self._W_t_q_coo[u1:u2, q1:q2] = np.empty((u2 - u1, q2 - q1))
 
     def _r_OP_verts_jax(self, q):
-        return ElementKinematics.r_OP_batch(
-            self._alpha_verts, q.reshape((self.n_vert, -1)), self.B_r_CPs
-        )
+        if self._vert_at_node:
+            return NodeKinematics.r_OP_batch(q.reshape((self.n_vert, -1)), self.B_r_CPs)
+        else:
+            return ElementKinematics.r_OP_batch(
+                self._alpha_verts, q.reshape((self.n_vert, -1)), self.B_r_CPs
+            )
 
     def _r_OP_verts(self, q):
         return self._r_OP_verts_jit(q)
 
-    @staticmethod
-    @jit
-    def _W_t_verts(alpha_vert, q_vert, B_r_CPs):
-        r_OP_vert = ElementKinematics.r_OP_batch(alpha_vert, q_vert, B_r_CPs)
-        J_P_vert = ElementKinematics.J_P_batch(alpha_vert, q_vert, B_r_CPs)
-
+    def _W_t_jax(self, q):
+        q_vert = q.reshape((self.n_vert, -1))
+        if self._vert_at_node:
+            r_OP_vert = NodeKinematics.r_OP_batch(q_vert, self.B_r_CPs)
+            J_P_vert = NodeKinematics.J_P_batch(q_vert, self.B_r_CPs)
+        else:
+            r_OP_vert = ElementKinematics.r_OP_batch(
+                self._alpha_verts, q_vert, self.B_r_CPs
+            )
+            J_P_vert = ElementKinematics.J_P_batch(
+                self._alpha_verts, q_vert, self.B_r_CPs
+            )
         n_line = r_OP_vert[1:] - r_OP_vert[:-1]
         l_line = jnp.linalg.norm(n_line, axis=1, keepdims=True)
         n_line /= l_line
@@ -129,21 +155,24 @@ class RodTendonKinematics(RodTendonExport):
 
         return jnp.einsum("ijk,ij->ik", J_P_vert, n_vert).ravel()
 
-    def _W_t_jax(self, q):
-        return RodTendonKinematics._W_t_verts(
-            self._alpha_verts, q.reshape((self.n_vert, -1)), self.B_r_CPs
-        )
-
     def W_t(self, q):
         return self._W_t_jit(q)
 
-    @staticmethod
-    @jit
-    def _W_t_q(alpha_vert, q_vert, B_r_CPs):
-        r_OP_vert = ElementKinematics.r_OP_batch(alpha_vert, q_vert, B_r_CPs)
-        r_OP_q_vert = ElementKinematics.r_OP_q_batch(alpha_vert, q_vert, B_r_CPs)
-        J_P_vert = ElementKinematics.J_P_batch(alpha_vert, q_vert, B_r_CPs)
-        J_P_q_vert = ElementKinematics.J_P_q_batch(alpha_vert, q_vert, B_r_CPs)
+    def _W_t_q_jax(self, q):
+        alpha_vert = self._alpha_verts
+        q_vert = q.reshape((self.n_vert, -1))
+        if self._vert_at_node:
+            r_OP_vert = NodeKinematics.r_OP_batch(q_vert, self.B_r_CPs)
+            r_OP_q_vert = NodeKinematics.r_OP_q_batch(q_vert, self.B_r_CPs)
+            J_P_vert = NodeKinematics.J_P_batch(q_vert, self.B_r_CPs)
+            J_P_q_vert = NodeKinematics.J_P_q_batch(q_vert, self.B_r_CPs)
+        else:
+            r_OP_vert = ElementKinematics.r_OP_batch(alpha_vert, q_vert, self.B_r_CPs)
+            r_OP_q_vert = ElementKinematics.r_OP_q_batch(
+                alpha_vert, q_vert, self.B_r_CPs
+            )
+            J_P_vert = ElementKinematics.J_P_batch(alpha_vert, q_vert, self.B_r_CPs)
+            J_P_q_vert = ElementKinematics.J_P_q_batch(alpha_vert, q_vert, self.B_r_CPs)
 
         n_line = r_OP_vert[1:] - r_OP_vert[:-1]
         l_line = jnp.linalg.norm(n_line, axis=1, keepdims=True)
@@ -158,7 +187,8 @@ class RodTendonKinematics(RodTendonExport):
             (n_line[0, None], -n_line[:-1] + n_line[1:], -n_line[-1, None])
         )
 
-        Z = jnp.zeros((1, 3, 14))
+        _nq_el = self._nq_el
+        Z = jnp.zeros((1, 3, _nq_el))
         n_vert_q = jnp.concatenate(
             (
                 jnp.concatenate(
@@ -180,14 +210,13 @@ class RodTendonKinematics(RodTendonExport):
 
         J_P_n_q = jnp.einsum("ijk,ijl->ikl", J_P_vert, n_vert_q)
         J_P_q_n = jnp.einsum("ijkl,ij->ikl", J_P_q_vert, n_vert)
-        W_t_q = J_P_n_q.at[:, :, 14:28].add(J_P_q_n)
+        W_t_q = J_P_n_q.at[:, :, _nq_el : 2 * _nq_el].add(J_P_q_n)
         return jnp.concatenate(
-            (W_t_q[0, :, 14:].ravel(), W_t_q[1:-1].ravel(), W_t_q[-1, :, :-14].ravel())
-        )
-
-    def _W_t_q_jax(self, q):
-        return RodTendonKinematics._W_t_q(
-            self._alpha_verts, q.reshape((self.n_vert, -1)), self.B_r_CPs
+            (
+                W_t_q[0, :, _nq_el:].ravel(),
+                W_t_q[1:-1].ravel(),
+                W_t_q[-1, :, :-_nq_el].ravel(),
+            )
         )
 
     def W_t_q(self, q):
@@ -198,23 +227,40 @@ class RodTendonKinematics(RodTendonExport):
     def assembler_callback(self):
         rod = self.rod
         els = np.array([rod._element_number(xi) for xi in self.xis])
-        self.qDOF = np.concatenate([rod.qDOF[rod.elDOF[el]] for el in els])
-        self.uDOF = np.concatenate([rod.uDOF[rod.elDOF_u[el]] for el in els])
+        if not self._vert_at_node:
+            warn(
+                "❌ Some tendon vertices are not at the element ends, leading to a more complex DOF mapping. Please check if this is necessary."
+            )
+            self.qDOF = np.concatenate([rod.qDOF[rod.elDOF[el]] for el in els])
+            self.uDOF = np.concatenate([rod.uDOF[rod.elDOF_u[el]] for el in els])
+        else:
+            self.qDOF = np.concatenate(
+                [
+                    rod.qDOF[rod.elDOF[el]][al * 7 : (al + 1) * 7]
+                    for al, el in zip(self._alpha_verts, els)
+                ]
+            )
+            self.uDOF = np.concatenate(
+                [
+                    rod.uDOF[rod.elDOF_u[el]][al * 6 : (al + 1) * 6]
+                    for al, el in zip(self._alpha_verts, els)
+                ]
+            )
 
 
-class RodTendonForce(RodTendonKinematics):
+class RodTendonForce(RodTendonKinematics, TauContribution):
     def __init__(
         self, rod: DiscreteRod, xis, B_r_CPs=None, name="tendon", color=(0, 200, 50)
     ) -> None:
-        super().__init__(rod, xis, B_r_CPs=B_r_CPs, name=name, color=color)
-
-        self.nla_tau = 1
+        TauContribution.__init__(self, nla_tau=1, ntau=1)
+        RodTendonKinematics.__init__(
+            self, rod, xis, B_r_CPs=B_r_CPs, name=name, color=color
+        )
 
         self._Wla_tau_q_coo = CooMatrix((self.n_vert * 12, self.n_vert * 14))
         self._Wla_tau_q_coo.col = self._W_t_q_coo.col.copy()
         self._Wla_tau_q_coo.row = self._W_t_q_coo.row.copy()
 
-        self.__W_tau_jit = jit(self.W_tau_jax)
         self.__Wla_tau_q_jit = jit(self.Wla_tau_q_jax)
 
     def assembler_callback(self):
@@ -232,60 +278,19 @@ class RodTendonForce(RodTendonKinematics):
     def W_tau(self, t, q):
         return self._W_t_jit(q)
 
-    def Wla_tau_q_jax(self, t, q, u):
-        la_tau = self.la_tau(t, q, u)
-        return self._W_t_q_jit(q) * la_tau
+    def Wla_tau_q_jax(self, t, q, u, tau):
+        return self._W_t_q_jit(q) * tau
 
-    def Wla_tau_q(self, t, q, u):
+    def Wla_tau_q(self, t, q, u, tau):
         coo = self._Wla_tau_q_coo
-        coo.data = self.__Wla_tau_q_jit(t, q, u)
+        coo.data = self.__Wla_tau_q_jit(t, q, u, tau=tau)
         return coo
 
-    def la_tau_jax(self, t, q, u):
+    def la_tau_jax(self, t, q, u, tau):
+        return tau
+
+    def la_tau(self, t, q, u, tau):
+        return tau
+
+    def tau(self, t):
         return 0.0
-
-    def la_tau(self, t, q, u):
-        return 0.0
-
-    # @property
-    # def la_tau(self):
-    #     return JaxProxy(self._la_tau, self._la_tau_jax)
-
-
-class RodTendonForceIntegrator(RodTendonKinematics):
-    def __init__(
-        self, rod: DiscreteRod, xis, B_r_CPs=None, name="tendon", color=(0, 200, 50)
-    ) -> None:
-        raise NotImplementedError
-        super().__init__(rod, xis, B_r_CPs=B_r_CPs, name=name, color=color)
-        self.nla_tau = 1
-        self.nq = 1
-        self.q0 = np.zeros(1)
-
-        def W_tau(t, q):
-            return self.W_t(q[:-1])
-
-        self.W_tau = W_tau
-
-        def Wla_tau_q(t, q, u):
-            coo = self.W_t_q_coo
-            coo.data = self.W_t_q_jit(q[:-1], self.la_tau(t, q, u))
-            return coo
-
-        self.Wla_tau_q = Wla_tau_q
-
-        self.Wla_tau_u = lambda t, q, u: None
-
-    def assembler_callback(self):
-        rod = self.rod
-        els = np.array([rod._element_number(xi) for xi in self.xis])
-        self.qDOF = np.concatenate(
-            [rod.qDOF[rod.elDOF[el]] for el in els] + [self.my_qDOF]
-        )
-        self.uDOF = np.concatenate([rod.uDOF[rod.elDOF_u[el]] for el in els])
-
-    def q_dot(self, t, q, u):
-        return 0.0
-
-    def la_tau(self, t, q, u):
-        return q[-1]

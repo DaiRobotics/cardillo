@@ -58,7 +58,7 @@ class Newton:
         self.u0 = np.zeros(system.nu)  # zero velocities as system is static
 
         self.n_load_steps = None
-        self.reset(x0, n_load_steps)
+        self.reset(x0=x0, n_load_steps=n_load_steps)
 
         if self.nla_N:
             raise NotImplementedError(
@@ -121,21 +121,33 @@ class Newton:
 
             self._fun_jit = jit(self._fun_jax)
 
-    def reset(self, x0=None, n_load_steps=None):
-        if x0 is None:
+    def reset(self, x0=None, *, f0=None, n_load_steps=None):
+        if x0 is not None:
+            if f0 is not None:
+                self._warm_start = True
+            else:
+                f0 = np.zeros_like(x0)
+                self._warm_start = False
+        else:
+            if f0 is not None:
+                raise ValueError("f0 cannot be specified without x0")
             x0 = self.x[0]
+            f0 = self.f[0]
+            self._warm_start = False
 
         if n_load_steps is not None and n_load_steps != self.n_load_steps:
             self.n_load_steps = n_load_steps
             self.load_steps = np.linspace(0, 1, n_load_steps + 1)
             self.nt = len(self.load_steps)
             self.x = np.zeros((self.nt, self.nx), dtype=float)
+            self.f = np.zeros((self.nt, self.nx), dtype=float)
             self.len_t = len(str(self.nt))
             self.len_t = len(str(self.nt))
 
         self.x[0] = x0
+        self.f[0] = f0
 
-    def _fun_jax(self, x, t):
+    def _fun_jax(self, x, t, tau):
         sys = self.system
         c0, c1, c2 = self.split_x
         r0, r1, r2, r3 = self.split_f
@@ -143,44 +155,35 @@ class Newton:
         q, la_g, la_c, la_N = x[:c0], x[c0:c1], x[c1:c2], x[c2:]
 
         # static equilibrium
-        F = jnp.zeros(self.nx, dtype=float)
-
-        F = F.at[:r0].add(sys.h_jax(t, q, self.u0))
-        F = F.at[:r0].add(
-            coo_matvec_jit(
-                sys.W_g_jax_row, sys.W_g_jax_col, sys.W_g_jax(t, q), la_g, sys.nu
-            )
+        h = sys.h_jax(t, q, self.u0)
+        h += coo_matvec_jit(
+            sys.W_g_jax_row, sys.W_g_jax_col, sys.W_g_jax(t, q), la_g, sys.nu
         )
-        F = F.at[:r0].add(
-            coo_matvec_jit(
-                sys.W_c_jax_row, sys.W_c_jax_col, sys.W_c_jax(t, q), la_c, sys.nu
-            )
+        h += coo_matvec_jit(
+            sys.W_c_jax_row, sys.W_c_jax_col, sys.W_c_jax(t, q), la_c, sys.nu
         )
 
         if sys.nla_tau > 0:
-            la_tau = sys.la_tau_jax(t, q, self.u0)
-            F = F.at[:r0].add(
-                coo_matvec_jit(
-                    sys.W_tau_jax_row,
-                    sys.W_tau_jax_col,
-                    sys.W_tau_jax(t, q),
-                    la_tau,
-                    sys.nu,
-                )
+            la_tau = sys.la_tau_jax(t, q, self.u0, tau)
+            h += coo_matvec_jit(
+                sys.W_tau_jax_row,
+                sys.W_tau_jax_col,
+                sys.W_tau_jax(t, q),
+                la_tau,
+                sys.nu,
             )
-
-        F = F.at[r0:r1].set(sys.g_jax(t, q))
-        F = F.at[r1:r2].set(sys.c_jax(t, q, self.u0, la_c))
-        F = F.at[r2:r3].set(sys.g_S_jax(t, q))
-
+        F = jnp.concatenate(
+            [h, sys.g_jax(t, q), sys.c_jax(t, q, self.u0, la_c), sys.g_S_jax(t, q)]
+        )
         return F
 
     def fun(self, x, t):
         t = float(t)
-        if self.system._jaxed:
-            return self._fun_jit(x, t)
-
         sys = self.system
+        tau = sys.tau(t)
+        if sys._jaxed:
+            return self._fun_jit(x, t, tau).__array__()
+
         c0, c1, c2 = self.split_x
         r0, r1, r2, r3 = self.split_f
         # unpack unknowns
@@ -209,7 +212,7 @@ class Newton:
         F["Wla_c", 0, :r0] = W_c.tocsr(fix_size=True) @ la_c
 
         W_tau.manual_sync()
-        la_tau = sys.la_tau(t, q, self.u0)
+        la_tau = sys.la_tau(t, q, self.u0, tau)
         F["Wla_tau", 0, :r0] = W_tau.tocsr(fix_size=True) @ la_tau
 
         if self.nla_N:
@@ -227,7 +230,7 @@ class Newton:
         F.manual_sync()
         return F.toarray(fix_size=True).ravel()
 
-    def _jac_jax(self, x, t):
+    def _jac_jax(self, x, t, tau):
         sys = self.system
         c0, c1, c2 = self.split_x
         q, la_g, la_c, la_N = x[:c0], x[c0:c1], x[c1:c2], x[c2:]
@@ -235,7 +238,7 @@ class Newton:
             [
                 sys.Wla_g_q_jax(t, q, la_g),
                 sys.Wla_c_q_jax(t, q, la_c),
-                sys.Wla_tau_q_jax(t, q, self.u0),
+                sys.Wla_tau_q_jax(t, q, self.u0, tau=tau),
                 sys.W_g_jax(t, q),
                 sys.W_c_jax(t, q),
                 sys.h_q_jax(t, q, self.u0),
@@ -248,11 +251,12 @@ class Newton:
 
     def jac(self, x, t):
         t = float(t)
+        sys = self.system
+        tau = sys.tau(t)
         if self.system._jaxed:
             jac = self._jac_coo_jax
-            jac.data = self._jac_jit(x, t)
+            jac.data = self._jac_jit(x, t, tau).__array__()
             return jac.tocsc(fix_size=True)
-        sys = self.system
         c0, c1, c2 = self.split_x
         r0, r1, r2, r3 = self.split_f
         # unpack unknowns
@@ -271,7 +275,7 @@ class Newton:
             t, q, la_c, format="Coo", coo=self._Wla_c_q_coo
         )
         Wla_tau_q = self._Wla_tau_q_coo = sys.Wla_tau_q(
-            t, q, self.u0, format="Coo", coo=self._Wla_tau_q_coo
+            t, q, self.u0, tau, format="Coo", coo=self._Wla_tau_q_coo
         )
         g_q = self._g_q_coo = sys.g_q(t, q, format="Coo", coo=self._g_q_coo)
         g_S_q = self._g_S_q_coo = sys.g_S_q(t, q, format="Coo", coo=self._g_S_q_coo)
@@ -326,31 +330,85 @@ class Newton:
         #              [    c_q,     None,   c_la_c,       None],
         #              [  g_S_q,     None,     None,       None],], format="csc")
 
-    def __pbar_text(self, force_iter, newton_iter, error):
-        return (
-            f" force iter {force_iter+1:>{self.len_t}d}/{self.nt};"
-            f" Newton steps {newton_iter+1:>{self.len_maxIter}d}/{self.options.newton_max_iter};"
-            f" error {error:.4e}"
-        )
+    def warmup_jax(self):
+        """Warm up the jax functions to avoid compilation time in the first iteration."""
+        if self.system._jaxed:
+            self.fun(self.x[0], float(0))
+            self._fun_jit(self.x[0], float(0), self.system.tau(0)).block_until_ready()
+            self.jac(self.x[0], float(0))
+            self._jac_jit(self.x[0], float(0), self.system.tau(0)).block_until_ready()
 
-    def solve(self):
+    def __pbar_text(self, force_iter, newton_iter, error):
+        if self.options.newton_adaptive:
+            return (
+                f" force iter {force_iter+1:>{self.len_t}d}/{self.nt};"
+                f" Newton steps {newton_iter+1:>{self.len_maxIter}d};"
+                f" error {error:.4e}"
+            )
+        else:
+            return (
+                f" force iter {force_iter+1:>{self.len_t}d}/{self.nt};"
+                f" Newton steps {newton_iter+1:>{self.len_maxIter}d}/{self.options.newton_max_iter};"
+                f" error {error:.4e}"
+            )
+
+    def solve(self, debug=False):
         pbar = range(0, self.nt)
         if self.verbose:
             pbar = tqdm(pbar, leave=True)
-
+        _skip = self._warm_start
+        _adaptive = self.options.newton_adaptive
+        _N_opt = self.options.newton_optimal_iter
         for i in pbar:
-            sol = fsolve(
-                self.fun,
-                self.x[i],
-                jac=self.jac,
-                fun_args=(self.load_steps[i],),
-                jac_args=(self.load_steps[i],),
-                options=self.options,
-                inexact=self.inexact,
-            )
+            if _skip:
+                self.x[1] = self.x[0]
+                _skip = False
+                continue
+            ta = self.load_steps[i - 1] if i > 0 else self.load_steps[0]
+            tb = self.load_steps[i]
+            if _adaptive:
+                dt = (tb - ta) * self.options.newton_relative_dt_init
+            else:
+                dt = tb - ta + 1e-10  # avoid ta + dt < tb due to floating point error
+            nit = 0
+            x0 = self.x[i]
+            while True:
+                tsim = min(ta + dt, tb)
+                sol = fsolve(
+                    self.fun,
+                    x0,
+                    jac=self.jac,
+                    fun_args=(tsim,),
+                    jac_args=(tsim,),
+                    options=self.options,
+                    inexact=self.inexact,
+                )
+                if sol.success:
+                    # Cutback/bisection from Crisfield's book?
+                    ta = tsim
+                    x0 = sol.x
+                    n_iter = sol.nit
+                    nit += n_iter
+                    factor = (_N_opt / max(n_iter, 1)) ** 0.5
+                    if debug:
+                        print(
+                            f"Step {i+1:>{self.len_t}d}/{self.nt}: {ta:.3f} <= {tb:.3f}, dt={dt:.3f}, n_iter={n_iter}"
+                        )
+                    if ta >= tb:
+                        break
+                    dt *= min(max(factor, 0.5), 2.0)
+                    # dt = min(dt, dt_max)
+                elif not _adaptive or dt <= (tb - ta) / 100:
+                    if debug:
+                        print(f"cannot converge, even with dt={dt}")
+                    break
+                else:
+                    dt *= 0.5
             self.x[i] = sol.x
+            self.f[i] = sol.fun
+
             if self.verbose:
-                pbar.set_description(self.__pbar_text(i, sol.nit, sol.error))
+                pbar.set_description(self.__pbar_text(i, nit, sol.error))
 
             if not sol.success and not self.options.continue_with_unconverged:
                 # return solution up to this iteration
@@ -374,7 +432,7 @@ class Newton:
 
             # solver step callback
             self.x[i, : self.split_x[0]], _ = self.system.step_callback(
-                self.load_steps[i], self.x[i, : self.split_x[0]], self.u0
+                ta, self.x[i, : self.split_x[0]], self.u0
             )
 
             # warm start for next step; store solution as new initial guess

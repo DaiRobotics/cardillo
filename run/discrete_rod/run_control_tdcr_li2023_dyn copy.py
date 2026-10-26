@@ -4,9 +4,9 @@ from matplotlib import pyplot as plt
 
 from cardillo.utility.jax_cache_config import configure_cache
 
-configure_cache("run_tdcr_li2023")
+configure_cache("run_tdcr_li2023_dyn")
 
-from cardillo.solver import Newton, ScipyDAE, SolverOptions, Riks
+from cardillo.solver import Newton, ScipyDAE, SolverOptions, Riks, Solution
 from cardillo.visualization import Plotter
 
 from cardillo_example_systems.tdcr_li2023 import gen_tdcr_li2023
@@ -26,15 +26,14 @@ def forward_statics(la_t, sol_last=None, verbose=False, solver="riks"):
         for td, la0, la1 in zip(tendons_stat, la_t0, la_t):
             td.la_tau = lambda t, q, u, la0=la0, la1=la1: la0 + (la1 - la0) * t
         if solver == "riks":
-            if sol_last is not None:
-                system_stat.set_new_initial_state(sol_last.q[-1], sol_last.u[-1])
-            # TODO: prevent repeatly initializiing the Riks solver
-            riks = Riks(system_stat, la_arc0=0.1, verbose=verbose)
+            riks.verbose = verbose
+            riks.reset(x0=riks.xk)
             sol = riks.solve()
         elif solver == "newton":
             newton.verbose = verbose
             x0 = newton.x[-1] if sol_last is not None else None
-            sol = newton.solve(x0=x0)
+            newton.reset(x0=x0)
+            sol = newton.solve()
         else:
             raise ValueError(f"Solver {solver} not supported. Use 'newton' or 'riks'.")
 
@@ -76,10 +75,17 @@ def make_piecewise_C2_interp_fun(ts, ys):
         t0 = ts[n]
         y1 = ys[n + 1]
         t1 = ts[n + 1]
+        assert t1 > t0, "t1 must be greater than t0"
         alpha = (t - t0) / (t1 - t0)
         y = y0 + (y1 - y0) * (10 * alpha**3 - 15 * alpha**4 + 6 * alpha**5)
         y_dot = (y1 - y0) * (30 * alpha**2 - 60 * alpha**3 + 30 * alpha**4) / (t1 - t0)
-        return np.concatenate([y, y_dot])
+        # TODO:
+        y_ddot = (
+            (y1 - y0)
+            * (60 * alpha - 180 * alpha**2 + 120 * alpha**3)
+            / ((t1 - t0) ** 2)
+        )
+        return np.concatenate([y, y_dot, y_ddot])
 
     return f
 
@@ -102,6 +108,7 @@ def set_points_to_traj(ys, t_trans, t_hold, hold_init_point=False):
     return make_piecewise_C2_interp_fun(ts, ys)
 
 
+"""
 def wrap_step_callback(step_callback):
     system_dyn.t_jac_last = -np.inf
     newton.r_OP_pred = []
@@ -112,45 +119,59 @@ def wrap_step_callback(step_callback):
         nonlocal sol_last
         t = float(t)
         q, u = step_callback(t, q, u)
-        if t - system_dyn.t_jac_last >= dt_jacobian:
-            la_t = system_dyn.la_tau(t, q, u)
-            sol_last, r_OP, dr_OP_dla_t = forward_statics(
-                la_t, sol_last=sol_last, verbose=False, solver="riks"
-            )
 
-            newton.t_pred.append(t)
-            newton.r_OP_pred.append(r_OP)
-            controller_dyn.dr_OP_dla_t_inv = scipy.linalg.pinv(dr_OP_dla_t)
-            system_dyn.t_jac_last = t
+        # self.system.M(t, q) @ u_dot
+        # - self.system.h(t, q, u)
+        # - self.system.W_tau(t, q, format="csr") @ self.system.la_tau(t, q, u)
+        # - self.system.W_c(t, q, format="csr") @ la_c
+        h = system_dyn.h(t, q, u)[-6:-3]
+        W_tau = system_dyn.W_tau(t, q, format="csr")[-6:-3].toarray()
+        # TODO: test only
+        # W_tau[:, -1] = 0  # remove the last column corresponding to the last tendon
+        W_tau_inv = np.linalg.pinv(W_tau, rcond=1e-6)
+        W_c = system_dyn.W_c(t, q, format="csr")[-6:-3]
+        M = system_dyn.M(t, q, format="csr")[-6:-3, -6:-3]
+        la_c = system_dyn.la_c(t, q, u)
+
+        f0 = h + W_c[:, -12:] @ la_c[-12:]  # + W_tau @ la_t_comp
+        la_t_comp = -W_tau_inv @ f0
+        J_inv = W_tau_inv @ M
+
+        # J_inv2 = np.linalg.pinv(np.linalg.inv(M.toarray()) @ W_tau)
+        # assert np.allclose(J_inv, J_inv2, atol=1e-6)
+        # TODO
+        controller_dyn.la_t_comp = la_t_comp * 0
+        controller_dyn.dla_t_dbeta = J_inv
+        system_dyn.t_jac_last = t
         return q, u
 
     return _step_callback
+"""
 
 
 if __name__ == "__main__":
     # ---- simulation setup ----
-    G_ACCEL = 9.81
+    G_ACCEL = 9.81 * 1
     rod_nelement = 12
     damping_ratio = 5e-2
     la_t_stat = np.array([0, 0, 0, 0])
     # static solver
     n_load_steps = 10
+    solver_stat = "newton"
+    la_arc0 = 0.1
     # dynamic solver
-    t_sim = 25
+    t_sim = 10
     dt_sim = 1e-3
     max_step = np.inf
     rtol = 1.0e-3
     atol = 1.0e-6
     # controller
-    Kp = 2
+    Kd = 500
+    # Kp = 400
+    Kp = (Kd / 2) ** 2
     t_traj_trans = 2
     t_traj_hold = 5 - t_traj_trans
-    dt_jacobian = 1e-2
-    #
-    n = t_sim / dt_jacobian
-    assert (
-        abs(n - round(n)) < 1e-8
-    ), f"t_sim ({t_sim} s) must be a multiple of dt_jacobian ({dt_jacobian} s)"
+    dt_control = 1e-2
 
     # ---- initial condition ----
     # load system
@@ -170,13 +191,21 @@ if __name__ == "__main__":
     # print("============")
     # sol_stat, _, _ = forward_statics(la_t1, verbose=True, solver="newton")
 
-    # # full gravity for jacobian computation
-    # rod_gravity_stat.force = lambda t, xi, f=rod_gravity_stat.force: f(sol_stat.t[-1], xi)
+    # system_stat.set_new_initial_state(sol_stat.q[-1], sol_stat.u[-1])
+    # riks = Riks(system_stat, la_arc0=0.05, compute_init_ds=False)
 
-    # sol_stat2, _, _ = forward_statics(la_t2, sol_last=sol_stat, verbose=True, solver="newton")
+    # # full gravity for jacobian computation
+    # rod_gravity_stat.force = lambda t, xi, f=rod_gravity_stat.force: f(
+    #     sol_stat.t[-1], xi
+    # )
+
+    # sol_stat2, _, _ = forward_statics(
+    #     la_t2, sol_last=sol_stat, verbose=True, solver="riks"
+    # )
     # print(sol_stat2.t)
 
     # from cardillo.visualization.vtk_render2 import Plotter
+
     # plt = Plotter(system_stat, window_size=(960, 540))
     # plt.render_solution(sol_stat2, speed_up=0.3)
 
@@ -190,9 +219,14 @@ if __name__ == "__main__":
     )
 
     sol_stat, _, _ = forward_statics(la_t_stat, verbose=True, solver="newton")
+
+    system_stat.set_new_initial_state(sol_stat.q[-1], sol_stat.u[-1])
+    riks = Riks(system_stat, la_arc0=la_arc0, compute_init_ds=False)
+
     rod_gravity_stat.force = lambda t, xi, f=rod_gravity_stat.force: f(
         sol_stat.t[-1], xi
     )
+
     # ---- trajectory generation ----
     # fmt: off
     r_OP_set_points = np.array([
@@ -215,24 +249,26 @@ if __name__ == "__main__":
         g_accel=G_ACCEL,
         damping_ratio=damping_ratio,
         statics=False,
-        controller=True,
+        controller="FeedbackLinearization",
     )
     system_dyn = ret["system"]
     rod_dyn = ret["rod"]
     controller_dyn = ret["controller"]
 
+    # set controller
+    controller_dyn.Kd = Kd
+    controller_dyn.Kp = Kp
+
     # set initial state
-    q0_dyn = np.concatenate((sol_stat.q[-1], la_t_stat))
+    q0_dyn = sol_stat.q[-1]
     u0_dyn = np.zeros_like(sol_stat.u[-1])
     system_dyn.set_new_initial_state(q0_dyn, u0_dyn)
 
     # full gravity for jacobian computation
     rod_gravity_stat.force = lambda t, xi, f=rod_gravity_stat.force: f(1, xi)
 
-    # set controller
-    controller_dyn.Kp = Kp * 1
     system_dyn.set_tau(r_OP_traj)
-    system_dyn.step_callback = wrap_step_callback(system_dyn.step_callback)
+    # system_dyn.step_callback = wrap_step_callback(system_dyn.step_callback)
 
     # solve the dynamic problem
     solver = ScipyDAE(
@@ -243,16 +279,109 @@ if __name__ == "__main__":
         atol=atol,
         rtol=rtol,
         max_step=max_step,
+        verbose=False,
     )
-    sol = solver.solve()
 
+    from cardillo.solver.radau_dae import solve_dae
+    from tqdm import tqdm
+
+    y0 = solver.y0
+    yp0 = solver.y_dot0
+
+    from cProfile import Profile
+
+    prof = Profile()
+    prof.enable()
+    first_step = None
+    t_list, q_list, u_list, la_t_list = [], [], [], []
+    pbar = tqdm(total=int(t_sim / dt_control), unit="pct")
+
+    for i in range(int(t_sim / dt_control)):
+        pbar.update(1)
+        t0 = i * dt_control
+        t1 = (i + 1) * dt_control
+
+        split = solver.split
+        q = y0[: split[0]]
+        u = y0[split[0] : split[1]]
+
+        # self.system.M(t, q) @ u_dot
+        # - self.system.h(t, q, u)
+        # - self.system.W_tau(t, q, format="csr") @ self.system.la_tau(t, q, u)
+        # - self.system.W_c(t, q, format="csr") @ la_c
+        h = system_dyn.h(t0, q, u)[-6:-3]
+        W_tau = system_dyn.W_tau(t0, q, format="csr")[-6:-3].toarray()
+        # TODO: test only
+        # W_tau[:, -1] = 0  # remove the last column corresponding to the last tendon
+        W_tau_inv = np.linalg.pinv(W_tau, rcond=1e-6)
+        W_c = system_dyn.W_c(t0, q, format="csr")[-6:-3]
+        M = system_dyn.M(t0, q, format="csr")[-6:-3, -6:-3]
+        la_c = system_dyn.la_c(t0, q, u)
+
+        la = la_c[-12:]
+        # la[6:] = 0
+        f0 = h + W_c[:, -12:] @ la  # + W_tau @ la_t_comp
+        la_t_comp = -W_tau_inv @ f0
+        J_inv = W_tau_inv @ M
+
+        # J_inv2 = np.linalg.pinv(np.linalg.inv(M.toarray()) @ W_tau)
+        # assert np.allclose(J_inv, J_inv2, atol=1e-6)
+        # TODO
+        # la_t_comp = la_t_stat.copy()
+        controller_dyn.la_t_comp = la_t_comp * 1
+        controller_dyn.dla_t_dbeta = J_inv * 1
+        # system_dyn.t_jac_last = t
+
+        # solver.pbar = tqdm(total=100, unit="pct")
+        # print(f"Solving DAE from t={t0:.2f} to t={t1:.2f}...")
+        sol = solve_dae(
+            solver.fun,
+            [t0, t1],
+            y0,
+            yp0,
+            # t_eval=[t0, t1],
+            method=solver.method,
+            rtol=solver.rtol,
+            atol=solver.atol,
+            events=[solver.event],
+            jac=solver.jac,
+            # dense_output=True,
+            # first_step=first_step,
+            **solver.kwargs,
+        )
+        # dt = np.diff(sol.sol.ts[-3:])
+        # first_step = sol.sol.ts[-1] - sol.sol.ts[-2]        # store segment solution (skip first point except for the first segment)
+        k0 = 0 if i == 0 else 1
+        ts = sol.t[k0:]
+        qs = sol.y[: split[0], k0:].T
+        us = sol.y[split[0] : split[1], k0:].T
+        t_list.append(ts)
+        q_list.append(qs)
+        u_list.append(us)
+        la_t_list.append(
+            np.array([system_dyn.la_tau(ti, qi, ui) for ti, qi, ui in zip(ts, qs, us)])
+        )
+        y0 = sol.y[:, -1]
+        yp0 = sol.yp[:, -1]
+    pbar.close()
+    # sol = solver.solve()
+    sol = Solution(
+        system_dyn,
+        t=np.concatenate(t_list),
+        q=np.vstack(q_list),
+        u=np.vstack(u_list),
+        la_t=np.vstack(la_t_list),
+    )
+
+    prof.disable()
+    prof.dump_stats("run_control_tdcr_li2023_dyn.prof")  #
+    # system_dyn.export("vtk", f"li2023_dyn", sol, fps=50)
     # ---- visualization ----
-    t, q, u = sol.t, sol.q, sol.u
-    la_t = np.array([system_dyn.la_tau(ti, qi, ui) for ti, qi, ui in zip(t, q, u)])
+    t, q, u, la_t = sol.t, sol.q, sol.u, sol.la_t
     r_OP = q[:, rod_dyn.qDOF][:, -7:-4]
     r_OP_ref = np.array([r_OP_traj(ti)[:3] for ti in t])
-    t_pred = np.array(newton.t_pred)
-    r_OP_pred = np.array(newton.r_OP_pred)
+    # t_pred = np.array(newton.t_pred)
+    # r_OP_pred = np.array(newton.r_OP_pred)
     fig = plt.figure(figsize=(12, 12))
     gs = fig.add_gridspec(4, 2)
 
@@ -264,9 +393,6 @@ if __name__ == "__main__":
     ax1.plot(t, r_OP_ref[:, 0], "-r", label="x_ref")
     ax2.plot(t, r_OP_ref[:, 1], "-r", label="y_ref")
     ax3.plot(t, r_OP_ref[:, 2], "-r", label="z_ref")
-    ax1.plot(t_pred, r_OP_pred[:, 0], "--g", label="x_pred")
-    ax2.plot(t_pred, r_OP_pred[:, 1], "--g", label="y_pred")
-    ax3.plot(t_pred, r_OP_pred[:, 2], "--g", label="z_pred")
     ax1.plot(t, r_OP[:, 0], label="x")
     ax2.plot(t, r_OP[:, 1], label="y")
     ax3.plot(t, r_OP[:, 2], label="z")

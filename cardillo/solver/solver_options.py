@@ -2,20 +2,26 @@ from dataclasses import dataclass
 from numpy import max, abs
 from scipy.sparse.linalg import spsolve
 
+# from scikits.umfpack import UmfpackContext, UMFPACK_A
+
 
 @dataclass
 class SolverOptions:
     fixed_point_atol: float = 1e-6
     fixed_point_rtol: float = 1e-6
     fixed_point_max_iter: int = int(1e3)
-    newton_atol: float = 1e-10
+    newton_atol: float = 1e-6  # 1e-10
     newton_rtol: float = 1e-6
     newton_max_iter: int = 20
+    newton_adaptive: bool = True
+    newton_relative_dt_init: float = 0.1
+    newton_optimal_iter: int = 4
     reuse_lu_decomposition: bool = True
     reuse_lu_max_iter: int = 4
     prox_scaling: float = 1.0
     continue_with_unconverged: bool = False
     linear_solver: callable = spsolve
+    # linear_solver = UmfpackContext
     numerical_jacobian_method: bool | str = False
     numerical_jacobian_eps: float = 1e-6
     compute_consistent_initial_conditions: bool = True

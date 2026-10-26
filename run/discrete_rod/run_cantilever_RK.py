@@ -22,7 +22,7 @@ system = ret["system"]
 # ScipyDAE
 ##########
 solver = ScipyDAE(system, tend, dt)
-
+solver.warmup_jax()
 t0 = perf_counter()
 sol = solver.solve()
 print(f"Scipy DAE time: {perf_counter() - t0:.2f} s")

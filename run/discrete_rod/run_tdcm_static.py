@@ -1,4 +1,5 @@
 from time import perf_counter
+import numpy as np
 
 from cardillo.utility.jax_cache_config import configure_cache
 
@@ -15,6 +16,8 @@ n_load_steps = 100
 ret = gen_single_segment_tdcm(live_plotter=True)
 system = ret["system"]
 plotter = ret["plotter"]
+assert system._jaxed
+system.set_tau(lambda t, tau=np.array([50, 0, 0, 0], float): t * tau)
 
 ############
 ## solver ##
@@ -23,11 +26,12 @@ solver = Newton(
     system,
     n_load_steps=n_load_steps,
     verbose=True,
+    inexact=True,
 )
 
 # warm up
-solver.fun(solver.x[0], system.t0)
 solver.jac(solver.x[0], system.t0)
+solver.fun(solver.x[0], system.t0).block_until_ready()
 
 t0 = perf_counter()
 sol = solver.solve()
