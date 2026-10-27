@@ -188,11 +188,7 @@ class ControllerInverseStatics:
 
 
 def gen_tdcr_li2023(
-    rod_nelement=10,
-    rod_q0=None,
-    g_accel=9.81,
-    damping_ratio=0,
-    statics=True
+    rod_nelement=10, rod_q0=None, g_accel=9.81, damping_ratio=0, statics=True
 ):
     # ---- pysical parameters ----
     rod_l0 = 0.192  # [m] length of rod
