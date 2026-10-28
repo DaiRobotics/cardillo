@@ -338,11 +338,11 @@ class Newton:
             self.jac(self.x[0], float(0))
             self._jac_jit(self.x[0], float(0), self.system.tau(0)).block_until_ready()
 
-    def __pbar_text(self, force_iter, newton_iter, error):
+    def __pbar_text(self, force_iter, newton_iter, error, newton_iter_totol=None):
         if self.options.newton_adaptive:
             return (
                 f" force iter {force_iter+1:>{self.len_t}d}/{self.nt};"
-                f" Newton steps {newton_iter+1:>{self.len_maxIter}d};"
+                f" Newton steps {newton_iter+1:>{self.len_maxIter}d}/{newton_iter_totol};"
                 f" error {error:.4e}"
             )
         else:
@@ -370,7 +370,7 @@ class Newton:
                 dt = (tb - ta) * self.options.newton_relative_dt_init
             else:
                 dt = tb - ta + 1e-10  # avoid ta + dt < tb due to floating point error
-            nit = 0
+            n_iter_total = 0
             x0 = self.x[i]
             while True:
                 tsim = min(ta + dt, tb)
@@ -388,7 +388,7 @@ class Newton:
                     ta = tsim
                     x0 = sol.x
                     n_iter = sol.nit
-                    nit += n_iter
+                    n_iter_total += n_iter
                     factor = (_N_opt / max(n_iter, 1)) ** 0.5
                     if debug:
                         print(
@@ -398,6 +398,8 @@ class Newton:
                         break
                     dt *= min(max(factor, 0.5), 2.0)
                     # dt = min(dt, dt_max)
+                    if self.verbose:
+                        pbar.set_description(self.__pbar_text(i, n_iter, sol.error, newton_iter_totol=n_iter_total))
                 elif not _adaptive or dt <= (tb - ta) / 100:
                     if debug:
                         print(f"cannot converge, even with dt={dt}")
@@ -407,8 +409,6 @@ class Newton:
             self.x[i] = sol.x
             self.f[i] = sol.fun
 
-            if self.verbose:
-                pbar.set_description(self.__pbar_text(i, nit, sol.error))
 
             if not sol.success and not self.options.continue_with_unconverged:
                 # return solution up to this iteration
