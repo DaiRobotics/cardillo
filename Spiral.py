@@ -85,7 +85,7 @@ if __name__ == "__main__":
     (1.0, lambda X: d2*np.cos(2*np.pi*X/p2), lambda X: d2*np.sin(2*np.pi*X/p2) ),
     (1.0, lambda X: d2*np.cos(2*np.pi*X/p2), lambda X: -d2*np.sin(2*np.pi*X/p2)),
     ]
-
+    
     tendons = [ ]
     for xi_end, y, z in B_r_tendon_parameters:
         n_path_points = int(np.ceil(xi_end * rod_nelement)) + 1 
@@ -157,9 +157,9 @@ if __name__ == "__main__":
     res_x = res_y = 10
     # plotter.add_ground(x0, x1, y0, y1, res_x, res_y)
     # ---- camera pose ----
-    r_OC = np.array([0, -0.35, 0.1], float)
+    r_OC = np.array([0, -1.2, 0.29], float)
     # r_OC = np.array([0, -0.35, 0.15], float)
-    r_OF = np.array([0, 0, 0.06], float)  # camera focal point
+    r_OF = np.array([0, 0, 0.29], float)  # camera focal point
     e_x_cam = np.array([1, 0, 0], float)
     e_z_cam = r_OF - r_OC
     e_z_cam /= np.linalg.norm(e_z_cam)
@@ -175,7 +175,7 @@ if __name__ == "__main__":
     cam.position = r_OC
     cam.focal_point = r_OF
     cam.view_up = -e_y_cam
-    cam.clipping_range = (0.01, 1)
+    cam.clipping_range = (0.01, 3)
     cam.Zoom(zoom)
 
     # plotter.live_render()

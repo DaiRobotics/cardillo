@@ -28,7 +28,8 @@ eggs/
 *.npz
 
 # exported data
-*.txt
+*.png
+*.jpg
 *.dat
 *.csv
 

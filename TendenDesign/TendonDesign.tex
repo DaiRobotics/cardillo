@@ -1,0 +1,271 @@
+\documentclass[11pt]{article} %Declare what type of document this is
+
+\usepackage[a4paper, margin=2.2cm]{geometry}  %Import the geometry package to control the page size and margins
+\usepackage{float}
+\usepackage{enumitem} %Import the enumitem package to customize the formatting of lists
+\usepackage{parskip}  %Import the parskip package to modify the spacing between paragraphs
+\usepackage{titlesec} %Import the titlesec package to customize the style of section headings
+\usepackage{graphicx} %Import the graphicx package to include images in the document
+\titleformat{\section}{\large\bfseries}{\thesection}{1em}{}
+
+\title{\vspace{-1.5cm}Tendon Routing Designs: Advantages and Disadvantages}
+\author{Haiyun Song}
+\date{\ }
+
+\begin{document}
+\maketitle
+
+\begin{enumerate}  %Start a numbered list
+
+
+\section*{Helical / Cross-helical Tendon Routing}
+
+\item \textbf{Helical Tendon Routing} \\
+Design: 3 straight tendons + 1 helical tendon. \\
+Advantages: +400\% workspace volume vs. pure straight routing, with only 1 extra tendon. \\
+Disadvantages: helical path harder to manufacture; bending--torsion coupling complicates modeling.
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Images/111.png}
+    \caption{Helical tendon routing 1.}
+    \label{fig:111}
+\end{figure}
+\item \textbf{Cross-helical Tendons} \\
+Design: 4 tendons, cross-helical (mirror-symmetric), single segment. \\
+Advantages: 1 segment produces an S-shape that normally needs 2 segments + 2 control systems. \\
+Disadvantages: complex, coupled force--shape relationship; harder to control precisely.
+\begin{figure}[H]
+    \centering
+    \includegraphics[height=6cm]{Images/222.png}
+    \caption{Helical tendon routing 2.}
+    \label{fig:222}
+\end{figure}
+\item \textbf{Modular Cable-Driven Soft Arm} \\
+Design: 3 tendons, double-helix wound on a mandrel, then cast in silicone. \\
+Advantages: winding + casting = 1 fabrication step; helical channel adds passive compliance for free. \\
+Disadvantages: double-helix winding precision needed during fabrication; harder to modify after casting.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Images/333.png}
+    \caption{Helical tendon routing 3.}
+    \label{fig:333}
+\end{figure}
+\begin{figure}[H]
+    \centering
+    \includegraphics[height = 6cm]{Images/Helical.jpg}
+    \caption{Helical tendon routing.}
+    \label{fig:helical_routing}
+\end{figure}
+\end{enumerate}
+
+\section*{Straight / Orthogonal Tendon Routing}
+
+\begin{enumerate}[leftmargin=1.4em, itemsep=0.8em]
+
+\item \textbf{Tapered TPU Backbone} \\
+Design: 3 straight tendons routed along rigid disk edges (not against the soft rod). \\
+Advantages: disk edges amplify the moment arm -- more bending force from less material strain. \\
+Disadvantages: adds rigid disks, increasing weight/parts count along an otherwise soft rod.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Images/444.jpg}
+    \caption{Straight tendon routing 1.}
+    \label{fig:444}
+\end{figure}
+\item \textbf{Compliant Spine Manipulator} \\
+Design: 9 tendons (3 segments $\times$ 3), straight, surface-conforming along vertebrae. \\
+Advantages: simple path, independent 3-segment control. \\
+Disadvantages: 9 tendons total -- more routing/assembly effort than single-segment designs.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Images/555.png}
+    \caption{Straight tendon routing 5.}
+    \label{fig:555}
+\end{figure}
+\item \textbf{3D Dynamics Cable-Driven Soft Manipulator} \\
+Design: 4 straight tendons, sheathed, only load the distal tip. \\
+Advantages: mid-section is passive $\rightarrow$ dynamics model simplifies to a lumped end-load problem. \\
+Disadvantages: sheaths add friction; can't locally control bending in the passive middle section.
+\begin{figure}[H]
+    \centering
+    \includegraphics[height = 6cm]{Images/666.png}
+    \caption{Straight tendon routing 6.}
+    \label{fig:666 }
+\end{figure}
+\item \textbf{Visual Servoing with Shape Feature} \\
+Design: 8 tendons, two groups anchored at different axial positions. \\
+Advantages: creates distinguishable local/global shape features -- good observability for vision-based control. \\
+Disadvantages: 8 tendons is a lot of hardware/routing just to aid sensing, not to expand workspace.
+\begin{figure}[H]
+    \centering
+    \includegraphics[height = 6cm]{Images/777.jpg}
+    \caption{Straight tendon routing 7.}
+    \label{fig:777}
+\end{figure}
+\item \textbf{Planar-to-Spatial Manipulator} \\
+Design: 4 tendons (2 per segment), two segments with orthogonal routing planes (90\textdegree\ offset). \\
+Advantages: near-complete decoupling between segments with very few tendons (only 4 total). \\
+Disadvantages: only 2 planes of control -- less shape flexibility than fully 3D routing per segment.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Images/888.png}
+    \caption{Straight tendon routing 8.}
+    \label{fig:888}
+\end{figure}
+\item \textbf{Actuation Space Reduction (reconfigurable)} \\
+Design: straight tendons, but spacer disks can be actively rotated to change routing direction. \\
+Advantages: each disk rotation = 1 extra DOF without adding tendons. \\
+Disadvantages: needs active rotating hardware per disk -- more actuators, more control complexity.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Images/999.jpg}
+    \caption{Straight tendon routing 9.}
+    \label{fig:999}
+\end{figure}
+\item \textbf{Elephant-Trunk-Inspired Robot} \\
+Design: 6 straight tendons, unchanged routing; bending shaped by swapping spring stiffness per module. \\
+Advantages: heterogeneous curvature without touching the routing path at all -- very simple tendon design. \\
+Disadvantages: reconfiguring stiffness (swapping springs) is a manual, discrete process, not a continuous control input.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Images/101010.png}
+    \caption{Straight tendon routing 10.}
+    \label{fig:101010}
+\end{figure}
+\item \textbf{Hybrid TDCR (torsion-avoiding)} \\
+Design: 1 tendon + lateral rotary joints that mechanically lock bending to one plane. \\
+Advantages: minimal tendon count (1!), torsion eliminated by construction, not by control. \\
+Disadvantages: needs a base rotation stage to redirect the bending plane -- extra mechanism.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Images/111111.jpg}
+    \caption{Straight tendon routing 11.}
+    \label{fig:111111}
+\end{figure}
+\item \textbf{TDCR for Medical Applications} \\
+Design: 4 straight tendons @ 90\textdegree, 9 springs between disks. \\
+Advantages: springs give equal spacing + free axial (3rd) DOF, no extra tendon needed for extension. \\
+Disadvantages: standard/simple design -- no special workspace or decoupling advantage.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Images/121212.jpg}
+    \caption{Straight tendon routing 12.}
+    \label{fig:121212}
+\end{figure}
+\item \textbf{Spring-Based Modular TDCR} \\
+Design: continuous spring backbone, tendons terminate at a detachable disk (proximal short-run, distal full-run). \\
+Advantages: effective tendon length is reconfigurable -- independent control of different arc segments without changing tendon count. \\
+Disadvantages: reconfiguring termination disks is manual/mechanical, not real-time controllable.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Images/131313.jpg}
+    \caption{Straight tendon routing 13.}
+    \label{fig:131313}
+\end{figure}
+\item \textbf{Low-Cost TDCR (Winter-Glasgow \& Borja 2024)} \\
+Design: 3 @ 120\textdegree\ or 4 @ 90\textdegree, straight, off-the-shelf U-bolt guides. \\
+Advantages: cheapest, simplest, easiest to manufacture/assemble of all surveyed designs; actuator placement decoupled from tendon exit angle via pulleys. \\
+Disadvantages: no routing innovation -- workspace/shape capability is baseline compared to helical/cross-helical designs.
+\begin{figure}[H]
+    \centering
+    \includegraphics[height = 6cm]{Images/141414.png}
+    \caption{Straight tendon routing 14.}
+    \label{fig:141414}
+\end{figure}
+\item \textbf{Multi-objective Dimensional Optimization} \\
+Design: 8 tendons (4/segment $\times$ 2), symmetric within segment, asymmetric angular offset between segments. \\
+Advantages: offset angle becomes an optimizable variable (vs. fixed 90\textdegree) -- jointly optimizes workspace and energy efficiency. \\
+Disadvantages: 8 tendons + optimization step adds design/computation overhead vs. fixed-angle designs.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Images/151515.jpg}
+    \caption{Straight tendon routing 15.}
+    \label{fig:151515}
+\end{figure}
+\item \textbf{Single-Motor Curvature-Distribution Rod} \\
+Design: 2 tendons, 1 motor (differential drive), non-constant curvature via disk spacing $d_n$. \\
+Advantages: extremely underactuated (1 motor!) yet produces non-constant curvature shapes. \\
+Disadvantages: only bends in one plane (2 tendons); curvature profile is fixed by disk spacing, not freely reprogrammable.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Images/161616.jpg}
+    \caption{Straight tendon routing 16.}
+    \label{fig:161616}
+\end{figure}
+\begin{figure}[H]
+    \centering
+    \includegraphics[height = 6cm]{Images/Straight.jpg}
+    \caption{Straight tendon routing.}
+    \label{fig:straight_routing}
+\end{figure}
+\end{enumerate}
+
+\section*{Body Geometry Is Helical, but Tendon Routing Stays Straight}
+
+\begin{enumerate}[leftmargin=1.4em, itemsep=0.8em]
+
+\item \textbf{Trimmed Helicoids (TH)} \\
+Design: body itself is a trimmed helicoid; tendons stay straight, simple triangular layout. \\
+Advantages: large workspace, high precision, compliant interaction -- all from body geometry, routing stays simple. \\
+Disadvantages: body fabrication (helicoid structure) is more complex than the routing itself.
+\begin{figure}[H]
+    \centering
+    \includegraphics[height = 6cm]{Images/171717.jpg}
+    \caption{Helical body geometry 1.}
+    \label{fig:helical_body_1}
+\end{figure}
+\item \textbf{SpiRobs} \\
+Design: body is a log-spiral; tendons stay straight (2-cable or 3-cable). \\
+Advantages: 2-cable is very simple (antagonistic curl); 3-cable adds full grasping with zero routing complexity. \\
+Disadvantages: behavior is tied to the fixed spiral body shape -- less tunable than active routing designs.
+\begin{figure}[H]
+    \centering
+    \includegraphics[height = 6cm]{Images/181818.png}
+    \caption{Helical body geometry 2.}
+    \label{fig:helical_body_2}
+\end{figure}
+\begin{figure}[H]
+    \centering
+    \includegraphics[height = 6cm]{Images/Body helical.jpg}
+    \caption{Helical body geometry.}
+    \label{fig:helical_body}
+\end{figure}
+\end{enumerate}
+
+\section*{Implicit / Internal-Channel Routing}
+
+\begin{enumerate}[leftmargin=1.4em, itemsep=0.8em]
+
+\item \textbf{Hollow TDCR (reference framework)} \\
+Design: implicit internal routing -- path emerges from tube deformation, not pre-fixed. \\
+Advantages: path becomes a continuous/differentiable design variable, not a discrete choice. \\
+Disadvantages: no fixed channel means more complex modeling; harder to predict/manufacture a specific path a priori.
+\begin{figure}[H]
+    \centering
+    \includegraphics[height = 6cm]{Images/191919.jpg}
+    \caption{Internal-Channel geometry 1.}
+    \label{fig:internal_channel_1}
+\end{figure}
+\item \textbf{Internal Tendon Routing Channels} \\
+Design: pre-defined internal channels inside a solid cylinder, tendon touches only the endpoints. \\
+Advantages: no side-contact friction -- clean force transmission, simpler modeling. \\
+Disadvantages: channels must be manufactured internally (harder than external grooves/holes).
+\begin{figure}[H]
+    \centering
+    \includegraphics[height = 6cm]{Images/202020.png}
+    \caption{Internal-Channel geometry 2.}
+    \label{fig:internal_channel_2}
+\end{figure}
+\begin{figure}[H]
+    \centering
+    \includegraphics[height = 6cm]{Images/Internal channel.jpg}
+    \caption{Internal tendon routing.}
+    \label{fig:internal_routing}
+\end{figure}
+\end{enumerate}
+
+\end{document}
+
+\end{enumerate}
+
+\end{document}

@@ -20,12 +20,12 @@ if __name__ == "__main__":
     rod_r0 = 30e-3  # [m] rod radius
     rod_l0 = 95e-3  # [m] length of the rod
     rod_r_ratio = (
-        0.4  # radius ratio of the rod along its length (tip radius / base radius)
+        1  # radius ratio of the rod along its length (tip radius / base radius)
     )
     rod_A_IB0 = np.zeros((3, 3), dtype=np.float64)
     rod_A_IB0[0, 1] = rod_A_IB0[1, 2] = rod_A_IB0[2, 0] = 1
-    rod_l_new = 0.2  # [m] new length of the rod
-    rod_r_new = rod_l_new * 0.05  # [m] rod radius
+    rod_l_new = 100e-3  # [m] new length of the rod
+    rod_r_new = 7e-3  # [m] rod radius
 
     ##################
     ## build system ##
@@ -35,7 +35,7 @@ if __name__ == "__main__":
     system = System()
 
     # ---- rod ----
-    density=1.41e3
+    density=1e3
     radius = lambda xi: rod_r_new * (1 - xi * (1 - rod_r_ratio))
     cross_section = CircularCrossSection(radius)
     EA = lambda xi: E * cross_section.area(xi)
@@ -47,7 +47,7 @@ if __name__ == "__main__":
         lambda xi: np.array([GJ(xi), EI(xi), EI(xi)]),
     )
     cross_section = CircularCrossSection(radius=radius)
-    E, G = 7e5, 2e5
+    E, G = 7e5, 3.33e5
 
     # generate initial configuration
     def r_OP(xi):
@@ -74,13 +74,13 @@ if __name__ == "__main__":
     # ---- rigid connections ----
     rc = RigidConnection(rod, system.origin, xi1=0)
 
-    # ---- tendons ----
+    # ---- tendons ----   
     B_r_CP_list = [
         rod_A_IB0.T
         @ np.array(
             [
-                radius(xi) * np.cos(0),
-                radius(xi) * np.sin(0),
+                3 * rod_r_new * np.cos(-np.pi / 2),
+                3 * rod_r_new * np.sin(-np.pi / 2),
                 0,
             ]
         )
@@ -107,11 +107,11 @@ if __name__ == "__main__":
     ############
     ## solver ##
     ############
-    F0 = 4
+    F0 = 3
     tendons[0].la = lambda t: F0 * t
     solver = Newton(
         system,
-        n_load_steps=8,
+        n_load_steps=20,
         options=SolverOptions(newton_atol=1e-10, newton_rtol=1e-6),
     )
 

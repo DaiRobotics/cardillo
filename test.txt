@@ -1,1 +1,29 @@
-this is text
+Latex编辑知识点：
+####开始插入####
+\documentclass[11pt]{article} %Declare what type of document this is
+
+\usepackage[a4paper, margin=2.2cm]{geometry}  %Import the geometry package to control the page size and margins
+\usepackage{float} %Figure near by the words
+\usepackage{enumitem} %Import the enumitem package to customize the formatting of lists
+\usepackage{parskip}  %Import the parskip package to modify the spacing between paragraphs
+\usepackage{titlesec} %Import the titlesec package to customize the style of section headings
+\usepackage{graphicx} %Import the graphicx package to include images in the document
+\titleformat{\section}{\large\bfseries}{\thesection}{1em}{}
+
+\title{\vspace{-1.5cm}Tendon Routing Designs: Advantages and Disadvantages}
+\author{Haiyun Song}
+\date{\ }
+
+\begin{document}
+\maketitle
+
+\begin{enumerate}  %Start a numbered list
+
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{文件夹名字/图片名字.jpg}
+    \caption{图片下方名字.}
+    \label{fig:编号名字}
+\end{figure}
+
