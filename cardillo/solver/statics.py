@@ -399,7 +399,11 @@ class Newton:
                     dt *= min(max(factor, 0.5), 2.0)
                     # dt = min(dt, dt_max)
                     if self.verbose:
-                        pbar.set_description(self.__pbar_text(i, n_iter, sol.error, newton_iter_totol=n_iter_total))
+                        pbar.set_description(
+                            self.__pbar_text(
+                                i, n_iter, sol.error, newton_iter_totol=n_iter_total
+                            )
+                        )
                 elif not _adaptive or dt <= (tb - ta) / 100:
                     if debug:
                         print(f"cannot converge, even with dt={dt}")
@@ -408,7 +412,6 @@ class Newton:
                     dt *= 0.5
             self.x[i] = sol.x
             self.f[i] = sol.fun
-
 
             if not sol.success and not self.options.continue_with_unconverged:
                 # return solution up to this iteration
