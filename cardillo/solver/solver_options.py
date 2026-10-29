@@ -13,9 +13,9 @@ class SolverOptions:
     newton_atol: float = 1e-6  # 1e-10
     newton_rtol: float = 1e-6
     newton_max_iter: int = 20
-    newton_adaptive: bool = True
     newton_relative_dt_init: float = 0.1
     newton_optimal_iter: int = 4
+    newton_inexact: bool = True
     reuse_lu_decomposition: bool = True
     reuse_lu_max_iter: int = 4
     prox_scaling: float = 1.0

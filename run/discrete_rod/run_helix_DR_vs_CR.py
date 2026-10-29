@@ -30,7 +30,13 @@ solver = Newton(
 solver.warmup_jax()
 
 t0 = perf_counter()
+from cProfile import Profile
+
+prof = Profile()
+prof.enable()
 sol = solver.solve()
+prof.disable()
+prof.dump_stats("run_helix_DR_vs_CR.prof")
 print(f"Discrete rod time: {perf_counter() - t0:.2f} s")
 
 t1, q1 = sol.t, sol.q[:, rod1.qDOF]

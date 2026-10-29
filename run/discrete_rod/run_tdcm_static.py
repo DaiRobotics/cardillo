@@ -26,7 +26,6 @@ solver = Newton(
     system,
     n_load_steps=n_load_steps,
     verbose=True,
-    inexact=True,
 )
 
 # warm up

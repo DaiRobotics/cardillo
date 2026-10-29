@@ -249,6 +249,7 @@ def fsolve(
         # if options.linear_solver is UmfpackContext:
         #     umf = UmfpackContext("dl")
         # Newton loop
+        dx_norm_old = None
         for i in range(options.newton_max_iter):
             # Newton step
             if inexact:
@@ -277,11 +278,27 @@ def fsolve(
             error = norm(f) / f.size**0.5
 
             res_conv = (error < tol_abs) or (error < error0 * tol_rel)
-            dx_conv = wrms(dx, x, tol_abs, tol_rel) < 1.0
+            dx_norm = wrms(dx, x, tol_abs, tol_rel)
+            dx_conv = dx_norm < 1.0
 
             converged = res_conv and dx_conv
             if converged:
                 break
+
+            # divergence check (Hairer1996, Sec. IV.8)
+            if not np.isfinite(error):
+                break
+
+            if dx_norm_old is not None:
+                theta = dx_norm / dx_norm_old  # contraction rate
+                if theta >= 1.0:
+                    break
+                if inexact:
+                    # predicted error after remaining iterations
+                    remaining = options.newton_max_iter - nit
+                    if theta**remaining / (1.0 - theta) * dx_norm > 1.0:
+                        break
+            dx_norm_old = dx_norm
 
         else:
             warn(f"fsolve is not converged after {i} iterations with error {error:.2e}")

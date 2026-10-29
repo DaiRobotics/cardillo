@@ -23,12 +23,10 @@ class Newton:
         self,
         system,
         n_load_steps=1,
-        inexact=False,
         options=SolverOptions(),
         verbose=True,
     ):
         self.system = system
-        self.inexact = inexact
         self.options = options
         self.verbose = verbose
 
@@ -124,16 +122,16 @@ class Newton:
     def reset(self, x0=None, *, f0=None, n_load_steps=None):
         if x0 is not None:
             if f0 is not None:
-                self._warm_start = True
+                self._x0_converged = True
             else:
                 f0 = np.zeros_like(x0)
-                self._warm_start = False
+                self._x0_converged = False
         else:
             if f0 is not None:
                 raise ValueError("f0 cannot be specified without x0")
             x0 = self.x[0]
             f0 = self.f[0]
-            self._warm_start = False
+            self._x0_converged = False
 
         if n_load_steps is not None and n_load_steps != self.n_load_steps:
             self.n_load_steps = n_load_steps
@@ -339,76 +337,93 @@ class Newton:
             self._jac_jit(self.x[0], float(0), self.system.tau(0)).block_until_ready()
 
     def __pbar_text(self, force_iter, newton_iter, error, newton_iter_totol=None):
-        if self.options.newton_adaptive:
-            return (
-                f" force iter {force_iter+1:>{self.len_t}d}/{self.nt};"
-                f" Newton steps {newton_iter+1:>{self.len_maxIter}d}/{newton_iter_totol};"
-                f" error {error:.4e}"
-            )
-        else:
-            return (
-                f" force iter {force_iter+1:>{self.len_t}d}/{self.nt};"
-                f" Newton steps {newton_iter+1:>{self.len_maxIter}d}/{self.options.newton_max_iter};"
-                f" error {error:.4e}"
-            )
+        return (
+            f" force iter {force_iter+1:>{self.len_t}d}/{self.nt};"
+            f" Newton steps {newton_iter:>{self.len_maxIter}d}/{newton_iter_totol};"
+            f" error {error:.4e}"
+        )
 
     def solve(self, debug=False):
-        pbar = range(0, self.nt)
+        _x0_converged = self._x0_converged
+        if not _x0_converged:
+            sol = fsolve(
+                self.fun,
+                self.x[0],
+                jac=self.jac,
+                fun_args=(self.load_steps[0],),
+                jac_args=(self.load_steps[0],),
+                options=self.options,
+                inexact=self.options.newton_inexact,
+            )
+            if not sol.success:
+                raise RuntimeError(
+                    "initial configuration not converged"
+                )
+            self.x[0], self.f[0] = sol.x, sol.fun
+
+        pbar = range(1, self.nt)
         if self.verbose:
             pbar = tqdm(pbar, leave=True)
-        _skip = self._warm_start
-        _adaptive = self.options.newton_adaptive
         _N_opt = self.options.newton_optimal_iter
+        dt_last = None
+        x_prev = t_prev = None
         for i in pbar:
-            if _skip:
-                self.x[1] = self.x[0]
-                _skip = False
-                continue
-            ta = self.load_steps[i - 1] if i > 0 else self.load_steps[0]
-            tb = self.load_steps[i]
-            if _adaptive:
-                dt = (tb - ta) * self.options.newton_relative_dt_init
-            else:
-                dt = tb - ta + 1e-10  # avoid ta + dt < tb due to floating point error
+            t0 = self.load_steps[i - 1]
+            t1 = self.load_steps[i]
+            dt01 = t1 - t0
+            dt = (
+                dt_last
+                if dt_last is not None
+                else dt01 * self.options.newton_relative_dt_init
+            )
             n_iter_total = 0
-            x0 = self.x[i]
+            ta = t0
+            xa = self.x[i - 1]
             while True:
-                tsim = min(ta + dt, tb)
+                tsim = t1 if ta + 1.1 * dt >= t1 else ta + dt
+                # linear extrapolation for initial guess
+                if x_prev is not None:
+                    x_guess = xa + (xa - x_prev) * ((tsim - ta) / (ta - t_prev))
+                else:
+                    x_guess = xa
+
                 sol = fsolve(
                     self.fun,
-                    x0,
+                    x_guess,
                     jac=self.jac,
                     fun_args=(tsim,),
                     jac_args=(tsim,),
                     options=self.options,
-                    inexact=self.inexact,
+                    inexact=self.options.newton_inexact,
                 )
                 if sol.success:
-                    # Cutback/bisection from Crisfield's book?
-                    ta = tsim
-                    x0 = sol.x
                     n_iter = sol.nit
                     n_iter_total += n_iter
-                    factor = (_N_opt / max(n_iter, 1)) ** 0.5
-                    if debug:
-                        print(
-                            f"Step {i+1:>{self.len_t}d}/{self.nt}: {ta:.3f} <= {tb:.3f}, dt={dt:.3f}, n_iter={n_iter}"
-                        )
-                    if ta >= tb:
+
+                    x_prev, t_prev = xa, ta
+                    ta, xa = tsim, sol.x
+
+                    # Cutback/bisection from Crisfield's book?
+                    if ta >= t1:
+                        # converged
                         break
-                    dt *= min(max(factor, 0.5), 2.0)
-                    # dt = min(dt, dt_max)
+                    factor = (_N_opt / max(n_iter, 1)) ** 0.5
+                    dt *= max(0.5, min(factor, 2.0))
+
                     if self.verbose:
-                        pbar.set_description(self.__pbar_text(i, n_iter, sol.error, newton_iter_totol=n_iter_total))
-                elif not _adaptive or dt <= (tb - ta) / 100:
-                    if debug:
-                        print(f"cannot converge, even with dt={dt}")
+                        pbar.set_description(
+                            self.__pbar_text(
+                                i, n_iter, sol.error, newton_iter_totol=n_iter_total
+                            )
+                        )
+                elif dt <= dt01 / 100:
+                    # not converged
                     break
                 else:
                     dt *= 0.5
-            self.x[i] = sol.x
+            dt_last = dt
+            self.x[i] = xa if not sol.success else sol.x
             self.f[i] = sol.fun
-
 
             if not sol.success and not self.options.continue_with_unconverged:
                 # return solution up to this iteration
@@ -434,10 +449,6 @@ class Newton:
             self.x[i, : self.split_x[0]], _ = self.system.step_callback(
                 ta, self.x[i, : self.split_x[0]], self.u0
             )
-
-            # warm start for next step; store solution as new initial guess
-            if i < self.nt - 1:
-                self.x[i + 1] = self.x[i]
 
         # return solution object
         if self.verbose:
