@@ -575,7 +575,7 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
         self.__jit_func__()
 
         # reference strain
-        _, self.B_gamma0, self.B_kappa0 = self._eval(Q)
+        _, self.Be_gamma0, self.Be_kappa0 = self._eval(Q)
 
     def __jit_func__(self):
         self._eval = jit(
@@ -765,9 +765,9 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
     @staticmethod
     @jit
     def _c_damp_u_el(qe, ue, Le):
-        B_gamma_dot_ue, B_kappa_dot_ue = DiscreteRod._eval_dot_u_el(qe, ue, Le)
+        Be_gamma_dot_ue, Be_kappa_dot_ue = DiscreteRod._eval_dot_u_el(qe, ue, Le)
         return jnp.concatenate(
-            [jnp.zeros((6, 12)), B_gamma_dot_ue, B_kappa_dot_ue], axis=0
+            [jnp.zeros((6, 12)), Be_gamma_dot_ue, Be_kappa_dot_ue], axis=0
         ) * (-Le)
 
     _c_damp_u_els = jit(vmap(_c_damp_u_el.__func__))
@@ -784,13 +784,13 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
 
         r_OC_s = (r_OC1 - r_OC0) * inv_Le
 
-        P = 0.5 * (P0 + P1)
+        Pe = 0.5 * (P0 + P1)
         P_s = (P1 - P0) * inv_Le
 
-        A_IB = mj.Exp_SO3_quat(P)
-        T = mj.T_SO3_quat(P)
+        A_IBe = mj.Exp_SO3_quat(Pe)
+        Te = mj.T_SO3_quat(Pe)
 
-        return r_OC_s, P, P_s, A_IB, T
+        return r_OC_s, Pe, P_s, A_IBe, Te
 
     @staticmethod
     @jit
@@ -799,88 +799,80 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
 
         v_C0 = ue[:3]
         v_C1 = ue[6:9]
-        B_Omega_0 = ue[3:6]
-        B_Omega_1 = ue[9:12]
+        B0_Omega = ue[3:6]
+        B1_Omega = ue[9:12]
 
         v_C_s = (v_C1 - v_C0) * inv_Le
 
-        B_Omega = 0.5 * (B_Omega_0 + B_Omega_1)
-        B_Omega_s = (B_Omega_1 - B_Omega_0) * inv_Le
+        Be_Omega = 0.5 * (B0_Omega + B1_Omega)
+        Be_Omega_s = (B1_Omega - B0_Omega) * inv_Le
 
-        return v_C_s, B_Omega, B_Omega_s
+        return v_C_s, Be_Omega, Be_Omega_s
 
     @staticmethod
     @jit
     def _eval_el(qe, Le):
-        r_OC_s, P, P_s, A_IB, T = DiscreteRod._eval_common(qe, Le)
+        r_OC_s, _, P_s, A_IBe, Te = DiscreteRod._eval_common(qe, Le)
 
-        B_gamma = A_IB.T @ r_OC_s
-        B_kappa = T @ P_s
+        Be_gamma = A_IBe.T @ r_OC_s
+        Be_kappa = Te @ P_s
 
-        return A_IB, B_gamma, B_kappa
+        return A_IBe, Be_gamma, Be_kappa
 
     _eval_els = jit(vmap(_eval_el.__func__))
 
     @staticmethod
     @jit
     def _eval_q_el(qe, Le):
-        r_OC_s, P, P_s, A_IB, T = DiscreteRod._eval_common(qe, Le)
+        r_OC_s, Pe, P_s, A_IBe, Te = DiscreteRod._eval_common(qe, Le)
         inv_Le = 1.0 / Le
 
-        # A_IB_qe
-        A_P_2 = 0.5 * mj.Exp_SO3_quat_P(P)
-        A_IB_qe = jnp.concatenate(
-            [jnp.zeros((3, 3, 3)), A_P_2, jnp.zeros((3, 3, 3)), A_P_2],
-            axis=-1,
-        )  # (3,3,14)
+        A_IBe_Pe = mj.Exp_SO3_quat_P(Pe)  # (3,3,4)
+        T_Pe = mj.T_SO3_quat_P(Pe)  # (3,4,4)
 
-        # T_qe
-        T_P_2 = 0.5 * mj.T_SO3_quat_P(P)  # (3,4,4)
-        T_qe = jnp.concatenate(
-            [jnp.zeros((3, 4, 3)), T_P_2, jnp.zeros((3, 4, 3)), T_P_2],
-            axis=-1,
-        )  # (3,4,14)
-
-        # B_gamma_qe <- B_gamma = A_IB.T @ r_OC_s
-        A_IB_T = A_IB.T
-        A_IB_T__r_OC_s_qe = (
-            jnp.concatenate([-A_IB_T, Z34, A_IB_T, Z34], axis=1) * inv_Le
+        # Be_gamma_qe = (A_IBe.T @ r_OC_s)_qe
+        Be_gamma_r2 = A_IBe.T * inv_Le
+        Be_gamma_P2 = 0.5 * jnp.einsum("ijk,i->jk", A_IBe_Pe, r_OC_s)  # (3,4)
+        Be_gamma_qe = jnp.concatenate(
+            [-Be_gamma_r2, Be_gamma_P2, Be_gamma_r2, Be_gamma_P2], axis=1
         )
-        B_gamma_qe = jnp.tensordot(A_IB_qe, r_OC_s, axes=[[0], [0]]) + A_IB_T__r_OC_s_qe
 
-        # B_kappa_qe <- B_kappa = T @ P_s
-        T__P_s_qe = jnp.concatenate([Z3, -T, Z3, T], axis=1) * inv_Le
-        B_kappa_qe = jnp.tensordot(T_qe, P_s, axes=[[1], [0]]) + T__P_s_qe
+        # Be_kappa_qe = (Te @ P_s)_qe
+        Be_kappa_P2_r = Te * inv_Le
+        Be_kappa_P2_l = 0.5 * jnp.einsum("ijk,j->ik", T_Pe, P_s)  # (3,4)
+        Be_kappa_qe = jnp.concatenate(
+            [Z3, Be_kappa_P2_l - Be_kappa_P2_r, Z3, Be_kappa_P2_l + Be_kappa_P2_r],
+            axis=1,
+        )
 
-        return A_IB_qe, B_gamma_qe, B_kappa_qe
-
-    _eval_q_els = jit(vmap(_eval_q_el.__func__))
+        return A_IBe_Pe, Be_gamma_qe, Be_kappa_qe
 
     @staticmethod
     @jit
     def _eval_dot_el(qe, ue, Le):
-        A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
-        v_C_s, B_Omega, B_Omega_s = DiscreteRod._eval_dot_common(ue, Le)
+        A_IBe, Be_gamma, Be_kappa = DiscreteRod._eval_el(qe, Le)
+        v_C_s, Be_Omega, Be_Omega_s = DiscreteRod._eval_dot_common(ue, Le)
 
-        B_gamma_dot = A_IB.T @ v_C_s - mj.cross3(B_Omega, B_gamma)
-        B_kappa_dot = B_Omega_s - mj.cross3(B_Omega, B_kappa)
+        Be_gamma_dot = A_IBe.T @ v_C_s - mj.cross3(Be_Omega, Be_gamma)
+        Be_kappa_dot = Be_Omega_s - mj.cross3(Be_Omega, Be_kappa)
 
-        return B_gamma_dot, B_kappa_dot
+        return Be_gamma_dot, Be_kappa_dot
 
     @staticmethod
     @jit
     def _eval_dot_q_el(qe, ue, Le):
-        A_IB_qe, B_gamma_qe, B_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
+        A_IBe_Pe, Be_gamma_qe, Be_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
+        v_C_s, Be_Omega, _ = DiscreteRod._eval_dot_common(ue, Le)
 
-        v_C_s, B_Omega, B_Omega_s = DiscreteRod._eval_dot_common(ue, Le)
+        common = 0.5 * jnp.einsum("ijk,i->jk", A_IBe_Pe, v_C_s)  # (3,4)
 
-        B_gamma_dot_qe = (
-            jnp.tensordot(A_IB_qe, v_C_s, axes=[[0], [0]])
-            - mj.ax2skew(B_Omega) @ B_gamma_qe
+        Be_gamma_dot_qe = (
+            jnp.concatenate([Z3, common, Z3, common], axis=1)
+            - mj.ax2skew(Be_Omega) @ Be_gamma_qe
         )
-        B_kappa_dot_qe = -mj.ax2skew(B_Omega) @ B_kappa_qe
+        Be_kappa_dot_qe = -mj.ax2skew(Be_Omega) @ Be_kappa_qe
 
-        return B_gamma_dot_qe, B_kappa_dot_qe
+        return Be_gamma_dot_qe, Be_kappa_dot_qe
 
     # TODO: analytical function
     _eval_dot_u_el = jit(jacrev(_eval_dot_el.__func__, argnums=1))
@@ -1120,22 +1112,24 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
     ############
     @staticmethod
     @jit
-    def _la_c_el(qe, Le, B_gamma0, B_kappa0, K_ga, K_ka):
-        A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
-        B_n = K_ga @ (B_gamma - B_gamma0)
-        B_m = K_ka @ (B_kappa - B_kappa0)
-        return jnp.concatenate([B_n, B_m])
+    def _la_c_el(qe, Le, Be_gamma0, Be_kappa0, K_ga, K_ka):
+        _, Be_gamma, Be_kappa = DiscreteRod._eval_el(qe, Le)
+        Be_n = K_ga @ (Be_gamma - Be_gamma0)
+        Be_m = K_ka @ (Be_kappa - Be_kappa0)
+        return jnp.concatenate([Be_n, Be_m])
 
     _la_c_els = jit(vmap(_la_c_el.__func__))
 
     @staticmethod
     @jit
-    def _la_c_damp_el(qe, ue, Le, B_gamma0, B_kappa0, K_ga, K_ka, K_ga_damp, K_ka_damp):
-        la_c_12 = DiscreteRod._la_c_el(qe, Le, B_gamma0, B_kappa0, K_ga, K_ka)
-        B_gamma_dot, B_kappa_dot = DiscreteRod._eval_dot_el(qe, ue, Le)
-        B_n_damp = K_ga_damp @ B_gamma_dot
-        B_m_damp = K_ka_damp @ B_kappa_dot
-        return jnp.concatenate([la_c_12, B_n_damp, B_m_damp])
+    def _la_c_damp_el(
+        qe, ue, Le, Be_gamma0, Be_kappa0, K_ga, K_ka, K_ga_damp, K_ka_damp
+    ):
+        la_c_12 = DiscreteRod._la_c_el(qe, Le, Be_gamma0, Be_kappa0, K_ga, K_ka)
+        Be_gamma_dot, Be_kappa_dot = DiscreteRod._eval_dot_el(qe, ue, Le)
+        Be_n_damp = K_ga_damp @ Be_gamma_dot
+        Be_m_damp = K_ka_damp @ Be_kappa_dot
+        return jnp.concatenate([la_c_12, Be_n_damp, Be_m_damp])
 
     _la_c_damp_els = jit(vmap(_la_c_damp_el.__func__))
 
@@ -1144,8 +1138,8 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
             return DiscreteRod._la_c_els(
                 DiscreteRod._gen_element_q(q),
                 self.L_els,
-                self.B_gamma0,
-                self.B_kappa0,
+                self.Be_gamma0,
+                self.Be_kappa0,
                 self.K_ga_els,
                 self.K_ka_els,
             ).ravel()
@@ -1154,8 +1148,8 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
                 DiscreteRod._gen_element_q(q),
                 DiscreteRod._gen_element_u(u),
                 self.L_els,
-                self.B_gamma0,
-                self.B_kappa0,
+                self.Be_gamma0,
+                self.Be_kappa0,
                 self.K_ga_els,
                 self.K_ka_els,
                 self.K_ga_damp_els,
@@ -1167,12 +1161,12 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
 
     @staticmethod
     @jit
-    def _c_el(qe, la_c, Le, B_gamma0, B_kappa0, C_n, C_m):
-        A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
+    def _c_el(qe, la_c, Le, Be_gamma0, Be_kappa0, C_n, C_m):
+        _, Be_gamma, Be_kappa = DiscreteRod._eval_el(qe, Le)
         B_n, B_m = la_c[:3], la_c[3:]
 
-        c1 = (C_n @ B_n - (B_gamma - B_gamma0)) * Le
-        c2 = (C_m @ B_m - (B_kappa - B_kappa0)) * Le
+        c1 = (C_n @ B_n - (Be_gamma - Be_gamma0)) * Le
+        c2 = (C_m @ B_m - (Be_kappa - Be_kappa0)) * Le
 
         return jnp.concatenate([c1, c2])
 
@@ -1180,13 +1174,15 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
 
     @staticmethod
     @jit
-    def _c_damp_el(qe, ue, la_c, Le, B_gamma0, B_kappa0, C_n, C_m, C_n_damp, C_m_damp):
-        c12 = DiscreteRod._c_el(qe, la_c[:6], Le, B_gamma0, B_kappa0, C_n, C_m)
-        B_gamma_dot, B_kappa_dot = DiscreteRod._eval_dot_el(qe, ue, Le)
-        B_n_damp, B_m_damp = la_c[6:9], la_c[9:]
+    def _c_damp_el(
+        qe, ue, la_c, Le, Be_gamma0, Be_kappa0, C_n, C_m, C_n_damp, C_m_damp
+    ):
+        c12 = DiscreteRod._c_el(qe, la_c[:6], Le, Be_gamma0, Be_kappa0, C_n, C_m)
+        Be_gamma_dot, Be_kappa_dot = DiscreteRod._eval_dot_el(qe, ue, Le)
+        Be_n_damp, Be_m_damp = la_c[6:9], la_c[9:]
 
-        c3 = (C_n_damp @ B_n_damp - B_gamma_dot) * Le
-        c4 = (C_m_damp @ B_m_damp - B_kappa_dot) * Le
+        c3 = (C_n_damp @ Be_n_damp - Be_gamma_dot) * Le
+        c4 = (C_m_damp @ Be_m_damp - Be_kappa_dot) * Le
 
         return jnp.concatenate([c12, c3, c4])
 
@@ -1198,8 +1194,8 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
                 DiscreteRod._gen_element_q(q),
                 la_c.reshape((self.nelement, -1)),
                 self.L_els,
-                self.B_gamma0,
-                self.B_kappa0,
+                self.Be_gamma0,
+                self.Be_kappa0,
                 self.C_n_els,
                 self.C_m_els,
             ).ravel()
@@ -1209,8 +1205,8 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
                 DiscreteRod._gen_element_u(u),
                 la_c.reshape((self.nelement, -1)),
                 self.L_els,
-                self.B_gamma0,
-                self.B_kappa0,
+                self.Be_gamma0,
+                self.Be_kappa0,
                 self.C_n_els,
                 self.C_m_els,
                 self.C_n_damp_els,
@@ -1226,18 +1222,18 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
     @staticmethod
     @jit
     def _c_q_el(qe, Le):
-        A_IB_qe, B_gamma_qe, B_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
-        return jnp.concatenate([B_gamma_qe, B_kappa_qe], axis=0) * (-Le)
+        _, Be_gamma_qe, Be_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
+        return jnp.concatenate([Be_gamma_qe, Be_kappa_qe], axis=0) * (-Le)
 
     _c_q_els = jit(vmap(_c_q_el.__func__))
 
     @staticmethod
     @jit
     def _c_damp_q_el(qe, ue, Le):
-        A_IB_qe, B_gamma_qe, B_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
-        B_gamma_dot_qe, B_kappa_dot_qe = DiscreteRod._eval_dot_q_el(qe, ue, Le)
+        _, Be_gamma_qe, Be_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
+        Be_gamma_dot_qe, Be_kappa_dot_qe = DiscreteRod._eval_dot_q_el(qe, ue, Le)
         return jnp.concatenate(
-            [B_gamma_qe, B_kappa_qe, B_gamma_dot_qe, B_kappa_dot_qe], axis=0
+            [Be_gamma_qe, Be_kappa_qe, Be_gamma_dot_qe, Be_kappa_dot_qe], axis=0
         ) * (-Le)
 
     _c_damp_q_els = jit(vmap(_c_damp_q_el.__func__))
@@ -1261,13 +1257,13 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
     @staticmethod
     @jit
     def _W_c_el(qe, Le):
-        A_IB, B_gamma, B_kappa = DiscreteRod._eval_el(qe, Le)
-        s1 = 0.5 * Le * mj.ax2skew(B_gamma)
-        s2 = 0.5 * Le * mj.ax2skew(B_kappa)
+        A_IBe, Be_gamma, Be_kappa = DiscreteRod._eval_el(qe, Le)
+        s1 = 0.5 * Le * mj.ax2skew(Be_gamma)
+        s2 = 0.5 * Le * mj.ax2skew(Be_kappa)
 
-        row1 = jnp.concatenate([A_IB, Z3], axis=1)
+        row1 = jnp.concatenate([A_IBe, Z3], axis=1)
         row2 = jnp.concatenate([s1, E3 + s2], axis=1)
-        row3 = jnp.concatenate([-A_IB, Z3], axis=1)
+        row3 = jnp.concatenate([-A_IBe, Z3], axis=1)
         row4 = jnp.concatenate([s1, -E3 + s2], axis=1)
 
         return jnp.concatenate([row1, row2, row3, row4], axis=0)
@@ -1299,22 +1295,24 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
     @staticmethod
     @jit
     def _Wla_c_q_el(qe, la_c, Le):
-        A_IB_qe, B_gamma_qe, B_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
-        B_n = la_c[:3]
-        B_m = la_c[3:]
+        A_IBe_Pe, Be_gamma_qe, Be_kappa_qe = DiscreteRod._eval_q_el(qe, Le)
 
-        A_IB_B_n__qe = B_n @ A_IB_qe
+        Be_n = la_c[:3]
+        Be_m = la_c[3:]
+
+        n_Pe = 0.5 * jnp.einsum("ijk,j->ik", A_IBe_Pe, Be_n)
+        n_qe = jnp.concatenate([Z3, n_Pe, Z3, n_Pe], axis=1)  # (3,14)
 
         common = (
             -0.5
             * Le
             * (
-                jnp.cross(B_n[:, None], B_gamma_qe, axis=0)
-                + jnp.cross(B_m[:, None], B_kappa_qe, axis=0)
+                jnp.cross(Be_n[:, None], Be_gamma_qe, axis=0)
+                + jnp.cross(Be_m[:, None], Be_kappa_qe, axis=0)
             )
         )
 
-        return jnp.concatenate([A_IB_B_n__qe, common, -A_IB_B_n__qe, common], axis=0)
+        return jnp.concatenate([n_qe, common, -n_qe, common], axis=0)
 
     _Wla_c_q_els = jit(vmap(_Wla_c_q_el.__func__))
 

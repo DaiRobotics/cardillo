@@ -20,14 +20,7 @@ from cardillo.math import Exp_SO3_quat, Log_SO3, Exp_SO3
 from cardillo.utility.check_time_derivatives import check_time_derivatives
 
 
-def forward_statics(
-    la_t,
-    active_gravity,
-    r_OP=None,
-    A_IB=None,
-    sol_last=None,
-    verbose=False
-):
+def forward_statics(la_t, active_gravity, sol_last=None, verbose=False):
     if sol_last is None:
         t0 = 0.0
     else:

@@ -257,7 +257,9 @@ class RodTendonForce(RodTendonKinematics, TauContribution):
             self, rod, xis, B_r_CPs=B_r_CPs, name=name, color=color
         )
 
-        self._Wla_tau_q_coo = CooMatrix((self.n_vert * 12, self.n_vert * 14))
+        self._Wla_tau_q_coo = CooMatrix(
+            (self.n_vert * self._nu_el, self.n_vert * self._nq_el)
+        )
         self._Wla_tau_q_coo.col = self._W_t_q_coo.col.copy()
         self._Wla_tau_q_coo.row = self._W_t_q_coo.row.copy()
 
