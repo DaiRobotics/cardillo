@@ -356,9 +356,7 @@ class Newton:
                 inexact=self.options.newton_inexact,
             )
             if not sol.success:
-                raise RuntimeError(
-                    "initial configuration not converged"
-                )
+                raise RuntimeError("initial configuration not converged")
             self.x[0], self.f[0] = sol.x, sol.fun
 
         pbar = range(1, self.nt)

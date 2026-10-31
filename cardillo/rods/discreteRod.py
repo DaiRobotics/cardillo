@@ -830,18 +830,18 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
         A_IBe_Pe = mj.Exp_SO3_quat_P(Pe)  # (3,3,4)
         T_Pe = mj.T_SO3_quat_P(Pe)  # (3,4,4)
 
-        # Be_gamma_qe = (A_IBe.T @ r_OC_s)_qe
-        Be_gamma_r2 = A_IBe.T * inv_Le
-        Be_gamma_P2 = 0.5 * jnp.einsum("ijk,i->jk", A_IBe_Pe, r_OC_s)  # (3,4)
+        # Be_gamma_qe = (A_IBe.T @ (r_OC1 - r_OC0) / Le)_qe
+        Be_gamma_r1 = A_IBe.T * inv_Le
+        Be_gamma_P1 = 0.5 * jnp.einsum("ijk,i->jk", A_IBe_Pe, r_OC_s)  # (3,4)
         Be_gamma_qe = jnp.concatenate(
-            [-Be_gamma_r2, Be_gamma_P2, Be_gamma_r2, Be_gamma_P2], axis=1
+            [-Be_gamma_r1, Be_gamma_P1, Be_gamma_r1, Be_gamma_P1], axis=1
         )
 
-        # Be_kappa_qe = (Te @ P_s)_qe
-        Be_kappa_P2_r = Te * inv_Le
-        Be_kappa_P2_l = 0.5 * jnp.einsum("ijk,j->ik", T_Pe, P_s)  # (3,4)
+        # Be_kappa_qe = (Te @ (P1 - P0) / Le)_qe
+        Be_kappa_P1_r = Te * inv_Le
+        Be_kappa_P1_l = 0.5 * jnp.einsum("ijk,j->ik", T_Pe, P_s)  # (3,4)
         Be_kappa_qe = jnp.concatenate(
-            [Z3, Be_kappa_P2_l - Be_kappa_P2_r, Z3, Be_kappa_P2_l + Be_kappa_P2_r],
+            [Z3, Be_kappa_P1_l - Be_kappa_P1_r, Z3, Be_kappa_P1_l + Be_kappa_P1_r],
             axis=1,
         )
 
@@ -866,20 +866,50 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
 
         common = 0.5 * jnp.einsum("ijk,i->jk", A_IBe_Pe, v_C_s)  # (3,4)
 
+        # Be_gamma_dot = A_IBe.T @ (v_C1 - v_C0) / Le - Be_Omega x Be_gamma
         Be_gamma_dot_qe = (
             jnp.concatenate([Z3, common, Z3, common], axis=1)
             - mj.ax2skew(Be_Omega) @ Be_gamma_qe
         )
+        # Be_kappa_dot = (B1_Omega - B0_Omega) / Le - Be_Omega x Be_kappa
         Be_kappa_dot_qe = -mj.ax2skew(Be_Omega) @ Be_kappa_qe
 
         return Be_gamma_dot_qe, Be_kappa_dot_qe
 
-    # TODO: analytical function
-    _eval_dot_u_el = jit(jacrev(_eval_dot_el.__func__, argnums=1))
+    @staticmethod
+    @jit
+    def _eval_dot_u_el(qe, ue, Le):
+        A_IBe, Be_gamma, Be_kappa = DiscreteRod._eval_el(qe, Le)
+        inv_Le = 1.0 / Le
+
+        # -Omega x a = a~ Omega, with Be_Omega = 0.5 * (B0_Omega + B1_Omega)
+        Be_gamma_tilde_half = 0.5 * mj.ax2skew(Be_gamma)
+        Be_kappa_tilde_half = 0.5 * mj.ax2skew(Be_kappa)
+
+        # Be_gamma_dot = A_IBe.T @ (v_C1 - v_C0) / Le - Be_Omega x Be_gamma
+        Be_gamma_dot_v1 = A_IBe.T * inv_Le
+        Be_gamma_dot_ue = jnp.concatenate(
+            [
+                -Be_gamma_dot_v1,
+                Be_gamma_tilde_half,
+                Be_gamma_dot_v1,
+                Be_gamma_tilde_half,
+            ],
+            axis=1,
+        )
+
+        # Be_kappa_dot = (B1_Omega - B0_Omega) / Le - Be_Omega x Be_kappa
+        I3_Le = jnp.eye(3) * inv_Le
+        Be_kappa_dot_ue = jnp.concatenate(
+            [Z3, Be_kappa_tilde_half - I3_Le, Z3, Be_kappa_tilde_half + I3_Le],
+            axis=1,
+        )
+
+        return Be_gamma_dot_ue, Be_kappa_dot_ue
 
     def _element_number(self, xi):
-        num = jnp.int64(xi * self.nelement)
-        return num - jnp.int64(num >= self.nelement)
+        num = jnp.floor(xi * self.nelement + 1e-10).astype(int)
+        return jnp.clip(num, 0, self.nelement - 1)
 
     def _view_element_q(self, q):
         stride = q.strides[0]
@@ -1037,7 +1067,6 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
             .__array__()
             .ravel()
         )
-        # TODO: speed up
         self._q_dot_u_coo.data[-len(T_SO3_inv_quat_nodes) :] = T_SO3_inv_quat_nodes
         return self._q_dot_u_coo
 
@@ -1345,78 +1374,152 @@ class DiscreteRod(DiscreteRodExport, CContribution, HContribution):
     def _alpha_jax(self, xi):
         num = self._element_number(xi)
         xi_node = jnp.array(self.xi_node)
-        return (xi - xi_node[num]) / (xi_node[num + 1] - xi_node[num])
+        xi0 = xi_node[num]
+        xi1 = xi_node[num + 1]
+        alpha = (xi - xi0) / (xi1 - xi0)
+        alpha = jnp.where(jnp.abs(alpha) < 1e-10, 0.0, alpha)
+        alpha = jnp.where(jnp.abs(alpha - 1.0) < 1e-10, 1.0, alpha)
+        return jnp.clip(alpha, 0.0, 1.0)
+
+    def _is_node(self, xi):
+        # evaluated in numpy so that it can be used for python branching inside jit
+        x = xi * self.nelement
+        return bool(np.abs(x - np.round(x)) < 1e-10)
 
     ####################################################
     # interactions with other bodies and the environment
     ####################################################
     def local_qDOF_P(self, xi):
-        el = self._element_number(xi)
-        return self.elDOF[el]
+        s = self.elDOF[self._element_number(xi)]
+        alpha = self._alpha(xi)
+        if alpha == 0:
+            return slice(s.start, s.start + 7)
+        elif alpha == 1:
+            return slice(s.stop - 7, s.stop)
+        else:
+            return s
 
     def local_uDOF_P(self, xi):
-        el = self._element_number(xi)
-        return self.elDOF_u[el]
+        s = self.elDOF_u[self._element_number(xi)]
+        alpha = self._alpha(xi)
+        if alpha == 0:
+            return slice(s.start, s.start + 6)
+        elif alpha == 1:
+            return slice(s.stop - 6, s.stop)
+        else:
+            return s
 
     ##########################
     # r_OP / A_IB contribution
     ##########################
     def r_OP(self, t, qe, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.r_OP(alpha, qe, B_r_CP)
+        if self._is_node(xi):
+            return NodeKinematics.r_OP(qe, B_r_CP)
+        else:
+            return ElementKinematics.r_OP(alpha, qe, B_r_CP)
 
     def r_OP_q(self, t, qe, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.r_OP_q(alpha, qe, B_r_CP)
+        if self._is_node(xi):
+            return NodeKinematics.r_OP_q(qe, B_r_CP)
+        else:
+            return ElementKinematics.r_OP_q(alpha, qe, B_r_CP)
 
     def v_P(self, t, qe, ue, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.v_P(alpha, qe, ue, B_r_CP)
+        if self._is_node(xi):
+            return NodeKinematics.v_P(qe, ue, B_r_CP)
+        else:
+            return ElementKinematics.v_P(alpha, qe, ue, B_r_CP)
 
     def v_P_q(self, t, qe, ue, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.v_P_q(alpha, qe, ue, B_r_CP)
+        if self._is_node(xi):
+            return NodeKinematics.v_P_q(qe, ue, B_r_CP)
+        else:
+            return ElementKinematics.v_P_q(alpha, qe, ue, B_r_CP)
 
     def J_P(self, t, qe, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.J_P(alpha, qe, B_r_CP)
+        if self._is_node(xi):
+            return NodeKinematics.J_P(qe, B_r_CP)
+        else:
+            return ElementKinematics.J_P(alpha, qe, B_r_CP)
 
     def J_P_q(self, t, qe, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.J_P_q(alpha, qe, B_r_CP)
+        if self._is_node(xi):
+            return NodeKinematics.J_P_q(qe, B_r_CP)
+        else:
+            return ElementKinematics.J_P_q(alpha, qe, B_r_CP)
 
     def a_P(self, t, qe, ue, ue_dot, xi, B_r_CP=jnp.zeros(3, dtype=float)):
         alpha = self._alpha(xi)
-        return ElementKinematics.a_P(alpha, qe, ue, ue_dot, B_r_CP)
+        if self._is_node(xi):
+            return NodeKinematics.a_P(qe, ue, ue_dot, B_r_CP)
+        else:
+            return ElementKinematics.a_P(alpha, qe, ue, ue_dot, B_r_CP)
 
     def A_IB(self, t, qe, xi):
         alpha = self._alpha(xi)
-        return ElementKinematics.A_IB(alpha, qe)
+        if self._is_node(xi):
+            return NodeKinematics.A_IB(qe)
+        else:
+            return ElementKinematics.A_IB(alpha, qe)
 
     def A_IB_q(self, t, qe, xi):
         alpha = self._alpha(xi)
-        return ElementKinematics.A_IB_q(alpha, qe)
+        if self._is_node(xi):
+            return NodeKinematics.A_IB_q(qe)
+        else:
+            return ElementKinematics.A_IB_q(alpha, qe)
 
     def B_Omega(self, t, qe, ue, xi):
         alpha = self._alpha(xi)
-        return ElementKinematics.B_Omega(alpha, ue)
+        if self._is_node(xi):
+            return NodeKinematics.B_Omega(ue)
+        else:
+            return ElementKinematics.B_Omega(alpha, ue)
 
     def B_Omega_q(self, t, qe, ue, xi):
-        return ElementKinematics.B_Omega_q
+        alpha = self._alpha(xi)
+        if self._is_node(xi):
+            return NodeKinematics.B_Omega_q
+        else:
+            return ElementKinematics.B_Omega_q
 
     def B_J_R(self, t, qe, xi):
         alpha = self._alpha(xi)
-        return ElementKinematics.B_J_R(alpha)
+        if self._is_node(xi):
+            return NodeKinematics.B_J_R
+        else:
+            return ElementKinematics.B_J_R(alpha)
 
     def B_J_R_q(self, t, qe, xi):
-        return ElementKinematics.B_J_R_q
+        alpha = self._alpha(xi)
+        if self._is_node(xi):
+            return NodeKinematics.B_J_R_q
+        else:
+            return ElementKinematics.B_J_R_q
 
     def B_Psi(self, t, qe, ue, ue_dot, xi):
         alpha = self._alpha(xi)
-        return ElementKinematics.B_Psi(alpha, ue_dot)
+        if self._is_node(xi):
+            return NodeKinematics.B_Psi(ue_dot)
+        else:
+            return ElementKinematics.B_Psi(alpha, ue_dot)
 
     def B_Psi_q(self, t, qe, ue, ue_dot, xi):
-        return ElementKinematics.B_Psi_q
+        alpha = self._alpha(xi)
+        if self._is_node(xi):
+            return NodeKinematics.B_Psi_q
+        else:
+            return ElementKinematics.B_Psi_q
 
     def B_Psi_u(self, t, qe, ue, ue_dot, xi):
-        return ElementKinematics.B_Psi_u
+        alpha = self._alpha(xi)
+        if self._is_node(xi):
+            return NodeKinematics.B_Psi_u
+        else:
+            return ElementKinematics.B_Psi_u

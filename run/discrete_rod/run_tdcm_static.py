@@ -29,8 +29,7 @@ solver = Newton(
 )
 
 # warm up
-solver.jac(solver.x[0], system.t0)
-solver.fun(solver.x[0], system.t0).block_until_ready()
+solver.warmup_jax()
 
 t0 = perf_counter()
 sol = solver.solve()

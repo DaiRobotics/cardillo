@@ -94,14 +94,14 @@ class RodTendonKinematics(RodTendonExport):
         )  # avoid numerical issues with alpha=0 or 1
 
         # determine if the tendon vertices are all at the element ends (alpha=0 or 1)
-        _simple_vert = True
+        _vert_at_node = True
         for alpha in self._alpha_verts:
             if alpha > 0 and alpha < 1:
-                _simple_vert = False
+                _vert_at_node = False
                 break
         else:
             self._alpha_verts = np.astype(self._alpha_verts, int)
-        self._vert_at_node = _simple_vert
+        self._vert_at_node = _vert_at_node
 
         self._r_OP_verts_jit = jit(self._r_OP_verts_jax)
 
@@ -109,8 +109,8 @@ class RodTendonKinematics(RodTendonExport):
 
         self._W_t_q_jit = jit(self._W_t_q_jax)
 
-        self._nq_el = _nq_el = 7 if _simple_vert else 14
-        self._nu_el = _nu_el = 6 if _simple_vert else 12
+        self._nq_el = _nq_el = 7 if _vert_at_node else 14
+        self._nu_el = _nu_el = 6 if _vert_at_node else 12
         self._W_t_q_coo = CooMatrix((self.n_vert * _nu_el, self.n_vert * _nq_el))
         for k in range(self.n_vert):
             u1, u2 = _nu_el * k, _nu_el * (k + 1)
@@ -226,26 +226,13 @@ class RodTendonKinematics(RodTendonExport):
 
     def assembler_callback(self):
         rod = self.rod
-        els = np.array([rod._element_number(xi) for xi in self.xis])
         if not self._vert_at_node:
             warn(
-                "❌ Some tendon vertices are not at the element ends, leading to a more complex DOF mapping. Please check if this is necessary."
+                "❌ Some tendon vertices are not at the element nodes,"
+                " leading to a more complex DOF mapping. Please check if this is necessary."
             )
-            self.qDOF = np.concatenate([rod.qDOF[rod.elDOF[el]] for el in els])
-            self.uDOF = np.concatenate([rod.uDOF[rod.elDOF_u[el]] for el in els])
-        else:
-            self.qDOF = np.concatenate(
-                [
-                    rod.qDOF[rod.elDOF[el]][al * 7 : (al + 1) * 7]
-                    for al, el in zip(self._alpha_verts, els)
-                ]
-            )
-            self.uDOF = np.concatenate(
-                [
-                    rod.uDOF[rod.elDOF_u[el]][al * 6 : (al + 1) * 6]
-                    for al, el in zip(self._alpha_verts, els)
-                ]
-            )
+        self.qDOF = np.concatenate([rod.qDOF[rod.local_qDOF_P(xi)] for xi in self.xis])
+        self.uDOF = np.concatenate([rod.uDOF[rod.local_uDOF_P(xi)] for xi in self.xis])
 
 
 class RodTendonForce(RodTendonKinematics, TauContribution):

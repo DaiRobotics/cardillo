@@ -37,17 +37,25 @@ def gen_cantilever_beam(nelement=20, rod="DiscreteRod"):
 
     if rod == "DiscreteRod":
         Rod = DiscreteRod
+        Q = Rod.straight_configuration(nelement, L)
+        rod = Rod(
+            cross_section,
+            material_model,
+            nelement,
+            Q=Q,
+            damping_ratio=0.1,
+            cross_section_inertias=cross_section_inertias,
+        )
     elif rod == "CosseratRod":
         Rod = make_CosseratRod(polynomial_degree=1)
-
-    Q = Rod.straight_configuration(nelement, L)
-    rod = Rod(
-        cross_section,
-        material_model,
-        nelement,
-        Q=Q,
-        cross_section_inertias=cross_section_inertias,
-    )
+        Q = Rod.straight_configuration(nelement, L)
+        rod = Rod(
+            cross_section,
+            material_model,
+            nelement,
+            Q=Q,
+            cross_section_inertias=cross_section_inertias,
+        )
 
     system = System()
     f_fun = lambda t: t * np.array([0, -0.5, 0])

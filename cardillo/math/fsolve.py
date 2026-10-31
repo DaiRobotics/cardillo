@@ -131,6 +131,12 @@ def pinv_solve(A, b, rcond=1e-14, *args):
     return np.linalg.pinv(A.toarray(), rcond=rcond) @ b
 
 
+# weighted root mean square of the change in x
+def _weighted_rms(dx, x, atol, rtol):
+    scale = atol + rtol * np.abs(x)
+    return np.sqrt(np.mean((dx / scale) ** 2))
+
+
 def fsolve(
     fun,
     x0,
@@ -197,9 +203,17 @@ def fsolve(
         nfev += 1
         return f(x, *fun_args)
 
-    # compute Jacobian matrix using finite differences
-    if jac is None or options.numerical_jacobian_method:
+    if isinstance(jac, SuperLU):
+        inexact = True
+    elif callable(jac):
+        # wrap jacobian
+        def jacobian(x, *args):
+            nonlocal njev
+            njev += 1
+            return jac(x, *args)
 
+    elif options.numerical_jacobian_method:
+        # compute Jacobian matrix using finite differences
         def jacobian(x, *args):
             nonlocal njev
             njev += 1
@@ -211,19 +225,6 @@ def fsolve(
                     eps=options.numerical_jacobian_eps,
                 )
             )
-
-    else:
-        # do inexact newton with given LU-decomposition
-        if isinstance(jac, SuperLU):
-            inexact = True
-        else:
-            assert callable(jac), "user-defined jacobian must be callable"
-
-            # wrap jacobian
-            def jacobian(x, *args):
-                nonlocal njev
-                njev += 1
-                return jac(x, *args)
 
     # tolerences
     tol_abs = options.newton_atol
@@ -241,21 +242,13 @@ def fsolve(
         elif inexact:
             lu = splu(jacobian(x0, *jac_args))
 
-        # weighted root mean square of the change in x
-        def wrms(v, x, atol, rtol):
-            scale = atol + rtol * np.abs(x)
-            return np.sqrt(np.mean((v / scale) ** 2))
-
-        # if options.linear_solver is UmfpackContext:
-        #     umf = UmfpackContext("dl")
         # Newton loop
-        dx_norm_old = None
+        dx_rms_old = None
         for i in range(options.newton_max_iter):
             # Newton step
             if inexact:
                 dx = lu.solve(-f)
             else:
-                njev += 1
                 J = jacobian(x, *jac_args)
                 # if options.linear_solver is UmfpackContext:
                 #     if i == 0:
@@ -278,8 +271,8 @@ def fsolve(
             error = norm(f) / f.size**0.5
 
             res_conv = (error < tol_abs) or (error < error0 * tol_rel)
-            dx_norm = wrms(dx, x, tol_abs, tol_rel)
-            dx_conv = dx_norm < 1.0
+            dx_rms = _weighted_rms(dx, x, tol_abs, tol_rel)
+            dx_conv = dx_rms < 1.0
 
             converged = res_conv and dx_conv
             if converged:
@@ -289,16 +282,16 @@ def fsolve(
             if not np.isfinite(error):
                 break
 
-            if dx_norm_old is not None:
-                theta = dx_norm / dx_norm_old  # contraction rate
+            if dx_rms_old is not None:
+                theta = dx_rms / dx_rms_old  # contraction rate
                 if theta >= 1.0:
                     break
                 if inexact:
                     # predicted error after remaining iterations
                     remaining = options.newton_max_iter - nit
-                    if theta**remaining / (1.0 - theta) * dx_norm > 1.0:
+                    if theta**remaining / (1.0 - theta) * dx_rms > 1:
                         break
-            dx_norm_old = dx_norm
+            dx_rms_old = dx_rms
 
         else:
             warn(f"fsolve is not converged after {i} iterations with error {error:.2e}")
